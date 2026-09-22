@@ -1,4 +1,4 @@
-"""Exception hierarchy for Mizan.
+"""Exception hierarchy.
 
 Design note
 -----------

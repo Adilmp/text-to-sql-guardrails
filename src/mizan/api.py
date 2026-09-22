@@ -84,7 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         state.clear()
 
-    app = FastAPI(title="Mizan", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Text-to-SQL Guardrails", version="0.1.0", lifespan=lifespan)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Any) -> Response:

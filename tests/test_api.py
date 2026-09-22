@@ -30,7 +30,7 @@ class TestEndpoints:
     def test_index_serves_html(self, client: TestClient) -> None:
         response = client.get("/")
         assert response.status_code == 200
-        assert "Mizan" in response.text
+        assert "Text-to-SQL" in response.text
 
     def test_schema(self, client: TestClient) -> None:
         body = client.get("/api/schema").json()

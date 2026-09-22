@@ -1,14 +1,15 @@
-# Mizan — ميزان
+# text-to-sql-guardrails
 
 **Bilingual Arabic/English Text-to-SQL with AST-level guardrails and deterministic
 hallucination detection.**
 
-*Mīzān* means "scales" — the system weighs every generated query against the real database
-catalog before it is allowed to execute.
+Ask a database a question in Arabic or English. The generated SQL is parsed into an AST,
+validated against the real schema, and executed inside a defense-in-depth sandbox — before
+any result is returned.
 
-> Every number below was measured by `mizan eval` and is regenerated from the run artifacts
-> in `runs/` by `scripts/report.py`. Nothing here is estimated. What was *not* measured is
-> listed explicitly at the end of [`docs/results.md`](docs/results.md).
+> Every number below was measured by the eval harness and is regenerated from the run
+> artifacts in `runs/` by `scripts/report.py`. Nothing here is estimated. What was *not*
+> measured is listed explicitly at the end of [`docs/results.md`](docs/results.md).
 
 ---
 
@@ -135,7 +136,6 @@ Real signal — but still not a calibrated probability, see [D17](DECISIONS.md).
 | [`DECISIONS.md`](DECISIONS.md) | Every non-obvious engineering decision and why |
 | [`docs/interview-notes.md`](docs/interview-notes.md) | The genuinely hard problems and how they were solved |
 | [`docs/quiz.md`](docs/quiz.md) | Self-test on the codebase |
-| [`PROGRESS.md`](PROGRESS.md) | Build state and resume instructions |
 
 ## Licence
 
