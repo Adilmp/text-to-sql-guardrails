@@ -1,0 +1,79 @@
+{
+  "_comment": "Curated bilingual metadata layered on top of SQLite introspection. Arabic aliases are matched after normalize_for_matching(), so diacritics and letter variants do not need to be enumerated here. Keep column keys exactly as spelled in the database.",
+  "tables": {
+    "customers": {
+      "description": "One row per customer account",
+      "ar": ["العملاء", "الزبائن", "عميل", "زبون"],
+      "columns": {
+        "customer_id": { "description": "Primary key", "ar": ["رقم العميل", "معرف العميل"] },
+        "name_en": { "description": "Customer name in English", "ar": ["اسم العميل"] },
+        "name_ar": { "description": "Customer name in Arabic", "ar": ["الاسم بالعربية"] },
+        "city": { "description": "City the customer is based in", "ar": ["المدينة", "مدينة"] },
+        "country": { "description": "Country the customer is based in", "ar": ["الدولة", "البلد"] },
+        "segment": { "description": "Commercial segment", "ar": ["الشريحة", "الفئة"] },
+        "signed_up_on": { "description": "Date the account was created (YYYY-MM-DD)", "ar": ["تاريخ التسجيل", "تاريخ الاشتراك"] }
+      }
+    },
+    "orders": {
+      "description": "One row per order. An order is late when delivered_at > promised_at",
+      "ar": ["الطلبات", "الطلبيات", "طلب", "الشحنات"],
+      "columns": {
+        "order_id": { "description": "Primary key", "ar": ["رقم الطلب", "معرف الطلب"] },
+        "customer_id": { "description": "Which customer placed it", "ar": ["رقم العميل"] },
+        "warehouse_id": { "description": "Fulfilling warehouse", "ar": ["رقم المستودع"] },
+        "courier_id": { "description": "Delivering courier", "ar": ["رقم الناقل", "شركة التوصيل"] },
+        "placed_at": { "description": "When the order was placed (YYYY-MM-DD HH:MM:SS)", "ar": ["تاريخ الطلب", "وقت الطلب"] },
+        "promised_at": { "description": "Delivery date promised to the customer", "ar": ["التاريخ الموعود", "موعد التسليم"] },
+        "delivered_at": { "description": "Actual delivery timestamp, NULL if not yet delivered", "ar": ["تاريخ التسليم", "وقت التسليم الفعلي"] },
+        "status": { "description": "Lifecycle state", "ar": ["الحالة", "حالة الطلب"] },
+        "total_aed": { "description": "Order total in AED", "ar": ["الإجمالي", "المبلغ", "القيمة", "درهم"] }
+      }
+    },
+    "order_items": {
+      "description": "Line items. unit_price_aed here is the price actually charged, which may differ from the catalogue price in products",
+      "ar": ["بنود الطلب", "تفاصيل الطلب", "الأصناف"],
+      "columns": {
+        "order_item_id": { "description": "Primary key", "ar": ["رقم البند"] },
+        "order_id": { "description": "Parent order", "ar": ["رقم الطلب"] },
+        "product_id": { "description": "Which product", "ar": ["رقم المنتج"] },
+        "quantity": { "description": "Units ordered", "ar": ["الكمية", "العدد"] },
+        "unit_price_aed": { "description": "Price actually charged per unit, after discount", "ar": ["سعر الوحدة", "السعر المدفوع"] }
+      }
+    },
+    "products": {
+      "description": "Product catalogue",
+      "ar": ["المنتجات", "السلع", "منتج"],
+      "columns": {
+        "product_id": { "description": "Primary key", "ar": ["رقم المنتج"] },
+        "name_en": { "description": "Product name in English", "ar": ["اسم المنتج"] },
+        "name_ar": { "description": "Product name in Arabic", "ar": ["الاسم بالعربية"] },
+        "category": { "description": "Product category", "ar": ["الفئة", "التصنيف"] },
+        "unit_price_aed": { "description": "Catalogue list price in AED, before any discount", "ar": ["سعر القائمة", "السعر"] },
+        "weight_kg": { "description": "Unit weight in kilograms", "ar": ["الوزن"] }
+      }
+    },
+    "warehouses": {
+      "description": "Fulfilment centres",
+      "ar": ["المستودعات", "المخازن", "مستودع"],
+      "columns": {
+        "warehouse_id": { "description": "Primary key", "ar": ["رقم المستودع"] },
+        "name_en": { "description": "Warehouse name in English", "ar": ["اسم المستودع"] },
+        "name_ar": { "description": "Warehouse name in Arabic", "ar": ["الاسم بالعربية"] },
+        "city": { "description": "City", "ar": ["المدينة"] },
+        "country": { "description": "Country", "ar": ["الدولة"] },
+        "capacity_m3": { "description": "Storage capacity in cubic metres", "ar": ["السعة", "الطاقة الاستيعابية"] }
+      }
+    },
+    "couriers": {
+      "description": "Delivery companies",
+      "ar": ["شركات التوصيل", "الناقلون", "الناقل", "شركة الشحن"],
+      "columns": {
+        "courier_id": { "description": "Primary key", "ar": ["رقم الناقل"] },
+        "name_en": { "description": "Courier name in English", "ar": ["اسم الناقل"] },
+        "name_ar": { "description": "Courier name in Arabic", "ar": ["الاسم بالعربية"] },
+        "country": { "description": "Country of operation", "ar": ["الدولة"] },
+        "is_active": { "description": "1 if currently used, 0 if retired", "ar": ["نشط", "فعال"] }
+      }
+    }
+  }
+}

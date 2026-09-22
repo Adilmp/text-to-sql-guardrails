@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the floor the project supports; 3.11 is where
+        # Connection.setlimit(SQLITE_LIMIT_LENGTH) exists and the strongest form of the
+        # resource-exhaustion mitigation actually engages (SECURITY.md 2.1).
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests scripts
+
+      - name: Format check
+        run: ruff format --check src tests scripts
+        continue-on-error: true
+
+      - name: Type check
+        run: mypy src
+
+      - name: Tests
+        run: pytest -q -m "not live"
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install
+        run: uv pip install --system -e ".[dev]" pip-audit
+
+      # SAST. `S` is flake8-bandit, enabled in pyproject so it also runs on every local
+      # lint - a security check nobody remembers to invoke is not a control.
+      - name: SAST (bandit rules)
+        run: ruff check --select S src scripts
+
+      - name: Dependency vulnerability audit
+        run: pip-audit --strict --progress-spinner off
+
+      # Run the adversarial suite on its own so a failure here is unmistakable in the log
+      # rather than buried among 200 passing tests.
+      - name: Security test suite
+        run: pytest tests/test_security.py -v

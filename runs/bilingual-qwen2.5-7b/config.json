@@ -1,0 +1,24 @@
+{
+  "settings": {
+    "provider": "ollama",
+    "ollama_host": "http://127.0.0.1:11434",
+    "ollama_model": "qwen2.5:7b",
+    "anthropic_model": "claude-sonnet-5",
+    "request_timeout_s": 120.0,
+    "max_retries": 2,
+    "temperature": 0.0,
+    "max_output_tokens": 800,
+    "self_consistency_n": 1,
+    "self_consistency_temperature": 0.7,
+    "max_rows": 200,
+    "query_timeout_s": 5.0,
+    "max_sql_chars": 8000,
+    "db_path": "/mnt/data/mizan/data/gulf_logistics.sqlite",
+    "log_dir": "/mnt/data/mizan/logs",
+    "run_dir": "/mnt/data/mizan/runs",
+    "data_dir": "/mnt/data/mizan/data",
+    "log_level": "INFO"
+  },
+  "suite": "bilingual",
+  "run_id": "bilingual-qwen2.5-7b"
+}

@@ -1,0 +1,40 @@
+# Secrets — never commit. ANTHROPIC_API_KEY is read from the environment by the SDK and is
+# deliberately never stored on a config object (see DECISIONS.md D16), but a stray .env is
+# the usual way keys reach a public repository anyway.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated artifacts
+logs/
+data/*.sqlite
+data/spider/
+
+# Eval runs are kept deliberately: they are the evidence behind the numbers in the README.
+# Only the raw per-case logs of abandoned runs are ignored.
+runs/**/partial-*
+
+.DS_Store
+
+# Local dev
+.claude/
+PROGRESS.md

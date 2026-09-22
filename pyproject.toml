@@ -1,0 +1,102 @@
+[project]
+name = "mizan"
+version = "0.1.0"
+description = "Bilingual Arabic/English Text-to-SQL with AST-level guardrails and deterministic hallucination detection"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Adil Pervez" }]
+keywords = ["text-to-sql", "arabic", "nlp", "llm", "guardrails", "evaluation"]
+
+dependencies = [
+    # SQL parsing. The entire guardrail layer is built on a real AST, never regex.
+    "sqlglot>=25.0",
+    # Config + API schemas. Already a FastAPI transitive dep, so it costs us nothing extra.
+    "pydantic>=2.7",
+    # HTTP transport for the Ollama provider (Ollama has no official Python SDK worth the dep).
+    "httpx>=0.27",
+    "typer>=0.12",
+    "rich>=13.7",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.optional-dependencies]
+# Kept optional so the package installs and the full test suite runs with no API key
+# and no network. The provider is imported lazily; see src/mizan/providers/anthropic.py.
+anthropic = ["anthropic>=0.34"]
+dev = [
+    "pytest>=8.2",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-requests",
+]
+
+[project.scripts]
+mizan = "mizan.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mizan"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers"
+markers = [
+    "live: tests that call a real LLM backend (deselect with '-m \"not live\"')",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# "S" is flake8-bandit — static application security testing, run on every lint pass rather
+# than as a separate tool nobody remembers to invoke.
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "S"]
+ignore = [
+    # Class attribute shadowing a builtin is fine for pydantic field names.
+    "A003",
+    # "Ambiguous unicode character" — these rules flag characters that resemble ASCII
+    # (Arabic comma U+060C vs ",", Arabic semicolon U+061B vs ";", Arabic-Indic digits).
+    # This is a bilingual project: Arabic text in prompts, glossaries, test fixtures and
+    # docstrings is the subject matter, not a typo. The rules exist to catch homoglyph
+    # attacks in ASCII-only codebases and produce nothing but noise here. The characters
+    # they flag are exactly the ones `mizan.nl.normalize` is written to handle.
+    "RUF001", "RUF002", "RUF003",
+    # Exception names are chosen for readability at the call site — `QueryTimeout`,
+    # `RowLimitExceeded`, `GuardrailViolation` read better in an `except` clause than
+    # `QueryTimeoutError` would, and every one of them subclasses `MizanError`, which
+    # does carry the suffix.
+    "N818",
+    # S311: `random` is not cryptographic — correct, and neither use needs to be. The
+    # synthetic database is seeded precisely so it is reproducible (a CSPRNG would defeat
+    # the point), and retry jitter is a load-spreading device, not a secret.
+    "S311",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# S101: `assert` is how pytest expresses every assertion. The rule exists because asserts
+# are stripped under `python -O` in production code; test code is never run that way.
+# S108: the "/tmp/..." literals are paths the Zip Slip test asserts are *never created*.
+# S608: the test builds an intentionally malformed query to prove the validator rejects it.
+"tests/**" = ["S101", "S108", "S608"]
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["mizan"]
+mypy_path = "src"
+strict = true
+warn_unreachable = true
+# sqlglot ships partial stubs; we assert types at our own boundaries instead.
+# `anthropic` is an optional extra and is not installed in the default dev environment,
+# so its absence must not fail a type check of code that imports it lazily.
+[[tool.mypy.overrides]]
+module = ["sqlglot.*", "uvicorn.*", "anthropic.*"]
+ignore_missing_imports = true

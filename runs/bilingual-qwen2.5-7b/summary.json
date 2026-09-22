@@ -1,0 +1,89 @@
+{
+  "model": "qwen2.5:7b",
+  "provider": "ollama",
+  "suite": "bilingual",
+  "n": 24,
+  "correct": 19,
+  "accuracy": 0.7917,
+  "blocked": 1,
+  "executed": 22,
+  "by_language": {
+    "en": {
+      "n": 12,
+      "correct": 9
+    },
+    "ar": {
+      "n": 12,
+      "correct": 10
+    }
+  },
+  "by_difficulty": {
+    "easy": {
+      "n": 12,
+      "correct": 11
+    },
+    "medium": {
+      "n": 8,
+      "correct": 7
+    },
+    "hard": {
+      "n": 4,
+      "correct": 1
+    }
+  },
+  "by_tag": {
+    "aggregate": {
+      "n": 10,
+      "correct": 8
+    },
+    "group_by": {
+      "n": 4,
+      "correct": 4
+    },
+    "filter": {
+      "n": 8,
+      "correct": 7
+    },
+    "literal": {
+      "n": 2,
+      "correct": 2
+    },
+    "date_logic": {
+      "n": 4,
+      "correct": 2
+    },
+    "null_handling": {
+      "n": 4,
+      "correct": 4
+    },
+    "join": {
+      "n": 6,
+      "correct": 2
+    },
+    "order_by": {
+      "n": 2,
+      "correct": 0
+    },
+    "limit": {
+      "n": 2,
+      "correct": 1
+    },
+    "value_set": {
+      "n": 2,
+      "correct": 2
+    },
+    "arabic_digits": {
+      "n": 2,
+      "correct": 2
+    },
+    "boolean": {
+      "n": 2,
+      "correct": 1
+    }
+  },
+  "rejection_rules": {
+    "unknown_column": 2
+  },
+  "mean_latency_ms": 87629.3,
+  "total_seconds": 2103.1
+}

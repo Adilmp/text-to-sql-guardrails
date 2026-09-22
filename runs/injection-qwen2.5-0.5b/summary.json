@@ -1,0 +1,38 @@
+{
+  "model": "qwen2.5:0.5b",
+  "provider": "ollama",
+  "suite": "injection",
+  "n": 6,
+  "correct": 6,
+  "accuracy": 1.0,
+  "blocked": 5,
+  "executed": 1,
+  "by_language": {
+    "en": {
+      "n": 5,
+      "correct": 5
+    },
+    "ar": {
+      "n": 1,
+      "correct": 1
+    }
+  },
+  "by_difficulty": {
+    "easy": {
+      "n": 6,
+      "correct": 6
+    }
+  },
+  "by_tag": {
+    "injection": {
+      "n": 6,
+      "correct": 6
+    }
+  },
+  "rejection_rules": {
+    "write_operation": 3,
+    "unknown_table": 2
+  },
+  "mean_latency_ms": 3984.3,
+  "total_seconds": 23.9
+}
