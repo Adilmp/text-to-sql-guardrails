@@ -7,12 +7,6 @@ Ask a database a question in Arabic or English. The generated SQL is parsed into
 validated against the real schema, and executed inside a defense-in-depth sandbox — before
 any result is returned.
 
-> Every number below was measured by the eval harness and is regenerated from the run
-> artifacts in `runs/` by `scripts/report.py`. Nothing here is estimated. What was *not*
-> measured is listed explicitly at the end of [`docs/results.md`](docs/results.md).
-
----
-
 ## What this is
 
 Most Text-to-SQL demos do one thing: send a schema and a question to an LLM and run
@@ -40,6 +34,9 @@ second LLM whether the first one invented a column.
 
 ## Quick start
 
+**Requirements:** Python 3.10+, [uv](https://docs.astral.sh/uv/), and
+[Ollama](https://ollama.com/) with a model pulled (e.g. `ollama pull qwen2.5:7b`).
+
 ```bash
 uv venv --python 3.10 && uv pip install -e ".[dev]"
 ```
@@ -54,6 +51,12 @@ uv run mizan ask "which couriers delivered late most often?"
 
 ```bash
 uv run mizan ask "كم عدد الطلبات المتأخرة في دبي؟"
+```
+
+No Ollama? Use the mock provider to explore the guardrails without a model:
+
+```bash
+MIZAN_PROVIDER=mock uv run mizan serve
 ```
 
 ## Architecture
@@ -84,7 +87,8 @@ question ──► nl.detect_script ──► nl.clean_for_model
 
 Local CPU inference, 24-case paired bilingual suite + 6 adversarial prompts. Full breakdown
 in [`docs/results.md`](docs/results.md), regenerated from run artifacts by
-`scripts/report.py`.
+`scripts/report.py`. Every number is measured, not estimated — what was *not* measured is
+listed explicitly in that document.
 
 ### Execution accuracy
 
@@ -118,21 +122,18 @@ execution. That is the argument for this architecture in one line: **the validat
 model-independent, so a cheap, weak, 10×-faster model is still safe to put in front of a
 database — it is only less accurate.**
 
-> **A metric bug worth reading about.** The first version of the adversarial score counted a
-> *blocked* query as success. That runs backwards: a model too weak to follow a malicious
-> instruction gets blocked less often and therefore scores *worse* than a capable model that
-> complies every time and is caught every time. It rewarded model incompetence. The metric
-> now separates **containment** (the guardrail's job, must be 100%) from **susceptibility**
-> (a property of the model). See `classify_injection` in `eval/metrics.py`.
-
 **Confidence discriminates:** mean **0.97** on correct answers vs **0.71** on wrong ones.
 Real signal — but still not a calibrated probability, see [D17](DECISIONS.md).
+
+> The adversarial metric had a subtle bug during development — it rewarded model weakness
+> instead of guardrail strength. The fix and reasoning are in
+> [`eval/metrics.py::classify_injection`](src/mizan/eval/metrics.py).
 
 ## Documentation
 
 | Document | What's in it |
 |---|---|
-| [`SECURITY.md`](SECURITY.md) | Threat model, controls, **two real vulnerabilities found by testing**, and what is still uncovered |
+| [`SECURITY.md`](SECURITY.md) | Threat model, controls, **three real vulnerabilities found by testing**, and what is still uncovered |
 | [`DECISIONS.md`](DECISIONS.md) | Every non-obvious engineering decision and why |
 | [`docs/interview-notes.md`](docs/interview-notes.md) | The genuinely hard problems and how they were solved |
 | [`docs/quiz.md`](docs/quiz.md) | Self-test on the codebase |
