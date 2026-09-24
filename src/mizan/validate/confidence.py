@@ -6,7 +6,7 @@ This is a **heuristic score, not a calibrated probability**. It does not claim t
 means "correct 80% of the time". Its job is to rank answers so a UI can show a bounded
 warning and a human can decide whether to trust a number before pasting it into a report.
 Claiming calibration without a labelled dataset to calibrate against would be the kind of
-detail an interviewer is right to push on, so the code says what it is.
+detail a reviewer is right to push on, so the code says what it is.
 
 Why the signals are these signals
 ----------------------------------

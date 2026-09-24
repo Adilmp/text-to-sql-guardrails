@@ -135,8 +135,6 @@ Real signal — but still not a calibrated probability, see [D17](DECISIONS.md).
 |---|---|
 | [`SECURITY.md`](SECURITY.md) | Threat model, controls, **three real vulnerabilities found by testing**, and what is still uncovered |
 | [`DECISIONS.md`](DECISIONS.md) | Every non-obvious engineering decision and why |
-| [`docs/interview-notes.md`](docs/interview-notes.md) | The genuinely hard problems and how they were solved |
-| [`docs/quiz.md`](docs/quiz.md) | Self-test on the codebase |
 
 ## Licence
 

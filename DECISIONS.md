@@ -1,7 +1,7 @@
 # Decision log
 
 Every non-obvious choice in this codebase, what the alternatives were, and why this one
-won. Written so that an interviewer asking "why did you do it that way?" gets a real answer
+won. Written so that anyone asking "why was it done that way?" gets a real answer
 rather than "that's how the tutorial did it".
 
 ---
@@ -256,7 +256,7 @@ dumps `self.__dict__`.
 docstring and the UI say it is not calibrated.
 
 **Why.** Claiming calibration without a labelled dataset to calibrate against is exactly
-the kind of overstatement an interviewer should catch. The weight of a disabled signal is
+the kind of overstatement a careful reviewer should catch. The weight of a disabled signal is
 redistributed across the rest, so turning self-consistency off does not silently cap every
 score at 0.7 and make the feature look broken.
 

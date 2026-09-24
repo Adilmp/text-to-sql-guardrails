@@ -6,7 +6,7 @@ Why not a statistical language detector
 can answer exactly. We do not need to distinguish Arabic from Farsi from Urdu — we need to
 know which *prompt template* and which *glossary direction* to use, and that is decided by
 script, which is a deterministic property of the code points. A rule you can read is worth
-more here than a classifier you cannot explain in an interview.
+more here than a classifier you cannot explain.
 
 The ``MIXED`` case is real and common: Gulf users routinely write
 ``كم عدد الـ orders المتأخرة؟`` — Arabic grammar with English schema nouns borrowed
