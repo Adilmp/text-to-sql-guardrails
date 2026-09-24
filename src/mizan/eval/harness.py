@@ -4,11 +4,7 @@ Durability is the design priority here, for a mundane reason: on CPU inference a
 question takes 60–120 seconds, so a 24-case suite is a 40-minute run. Losing that to a
 crash at case 23 is unacceptable, so **every case is appended to a JSONL file the moment it
 completes**. A run that dies half way still leaves 23 usable measurements, and
-``--resume`` skips cases already recorded.
-
-This mirrors a lesson recorded in the user's own earlier research work, where six parallel
-agents were killed by a session limit before any of them had written output, and the entire
-run was lost. Incremental writes are cheap insurance.
+``--resume`` skips cases already recorded. Incremental writes are cheap insurance.
 """
 
 from __future__ import annotations

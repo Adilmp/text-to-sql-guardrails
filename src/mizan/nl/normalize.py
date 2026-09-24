@@ -84,8 +84,8 @@ _DIACRITICS_RE = re.compile(
 #: they have no compatibility decomposition — so an explicit table is mandatory.
 _ARABIC_INDIC_DIGITS = "٠١٢٣٤٥٦٧٨٩"
 #: U+06F0..U+06F9. Used in Persian and Urdu. Visually near-identical to the above for
-#: several digits but a different code point range — relevant here because the user's own
-#: locale (Pakistan) types these, not U+0660.
+#: several digits but a different code point range, and keyboards in Pakistan, Iran and
+#: Afghanistan type these rather than U+0660.
 _EXTENDED_ARABIC_INDIC_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
 
 _DIGIT_MAP = {

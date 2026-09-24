@@ -1,346 +1,394 @@
-# Decision log
+# Architecture Decisions
 
-Every non-obvious choice in this codebase, what the alternatives were, and why this one
-won. Written so that anyone asking "why was it done that way?" gets a real answer
-rather than "that's how the tutorial did it".
+Every non-obvious choice in this codebase, what the alternatives were, and why this one won.
+Each one ends with **In short**: the decision and its reason in one line.
+
+| # | Decision | Area |
+|---|---|---|
+| D1 | Guardrails check a parsed syntax tree, never a regex | Safety |
+| D2 | Functions are authorised by the name SQLite will see | Safety |
+| D3 | Function allowlist, not denylist | Safety |
+| D4 | Extraction never sanitises | Safety |
+| D5 | Two normalisation strengths, never one | Arabic |
+| D6 | Hallucination is caught by a parser, not a second model | Safety |
+| D7 | Aliases the query declares are not hallucinations | Safety |
+| D8 | Four runtime defences under the validator | Safety |
+| D9 | Execution accuracy is the main metric | Evaluation |
+| D10 | The eval suite is paired across languages | Evaluation |
+| D11 | Results are written one line at a time | Evaluation |
+| D12 | The demo database is seeded and deterministic | Data |
+| D13 | Low-cardinality columns show their values in the prompt | Prompt |
+| D14 | A blocked query returns HTTP 200 | API |
+| D15 | One provider interface for every model backend | Engineering |
+| D16 | The API key is never stored on an object | Security |
+| D17 | Confidence is a heuristic, not a probability | Confidence |
+| D18 | Column ambiguity is a warning, and only in a flat scope | Safety |
+| D19 | Limits bound bytes, not just rows and seconds | Security |
+| D20 | Database values in the prompt are untrusted input | Security |
+| D21 | The adversarial metric separates containment from susceptibility | Evaluation |
+| D22 | Record observations, derive verdicts | Evaluation |
+| D23 | Self-consistency votes on results, not on SQL text | Confidence |
+| D24 | Script detection by code points, not a language model | Arabic |
+| D25 | What runs is exactly what was validated | Safety |
+| D26 | A fallback must never look like a real answer | Engineering |
+| D27 | A local model by default | Engineering |
 
 ---
 
-## D1 — Guardrails validate a parsed AST, never a regex
-
-**Decision.** All SQL safety checks walk a `sqlglot` syntax tree.
-
-**Alternatives.** Regex keyword blocking; a prompt instruction telling the model not to
-write destructive SQL; running against a read-only replica and accepting the risk.
-
-**Why.** Every regex filter has a one-line bypass, and they compose badly:
+## D1: Guardrails check a parsed syntax tree, never a regex
+**Decision:** Every safety check walks a `sqlglot` syntax tree (AST) of the generated SQL.
+**Why:** Every regex filter has a one-line bypass:
 
 | Filter | Bypass |
 |---|---|
 | block `\bDROP\b` | `DR/**/OP TABLE t` |
-| prefix-match `SELECT` | `SELECT 1; DROP TABLE t` |
-| block `DELETE` | `WITH x AS (DELETE FROM t RETURNING 1) SELECT * FROM x` |
+| only allow statements starting with `SELECT` | `SELECT 1; DROP TABLE t` |
+| block `DELETE` at the top level | `WITH x AS (DELETE FROM t RETURNING 1) SELECT * FROM x` |
 | block `;` | `ATTACH DATABASE '/tmp/e.db' AS e` |
 | case-sensitive match | `dRoP TaBlE t` |
 
-A parser is immune to all of them because it reasons about what a statement *is*, not how
-it is spelled. Prompt instructions are not a control at all — they are a request.
+A parser is immune to all of them because it works on what the statement *is*, not how it is
+spelled: comments, casing, nesting and stacking are resolved before any check runs.
+**Alternatives:** Regex keyword blocking; telling the model in the prompt not to write
+destructive SQL (that is a request, not a control); relying on a read-only database alone.
+**Trade-off:** A dependency on `sqlglot`, and the validator has to track its API. Real bugs came
+from exactly that (D2).
+**In short:** *"Safety is decided on a parsed tree, because every regex filter has a one-line
+bypass."*
 
-**Cost.** A dependency on `sqlglot`, and the validator must track its API. Two real bugs
-came from exactly that (see D2, D3).
+## D2: Functions are authorised by the name SQLite will see
+**Decision:** `_function_name()` renders each function node back to SQLite and reads the name
+before the opening bracket. Functions sqlglot does not model (`exp.Anonymous`, which is where
+`load_extension` and `readfile` land) keep their name as written.
+**What went wrong first:** Two traps, both found when the allowlist rejected ordinary queries.
+1. **Operators are `exp.Func` subclasses.** `exp.And` inherits `Connector → Binary → Func`, so
+   collecting functions returned every `AND`, `OR` and `LIKE`, and the allowlist rejected
+   `and()` in a normal `WHERE` clause. The obvious fix, excluding those base classes behind an
+   `issubclass(node, exp.Expression)` guard, silently did nothing: `Connector` and `Binary` are
+   mixins that do not derive from `Expression`, so the guard removed them from the exclusion
+   list.
+2. **sqlglot translates between dialects.** SQLite's `strftime` parses to `exp.TimeToStr`, so the
+   allowlist was compared against internal class names nobody typed and the database never sees.
 
----
+**Why this fix:** It answers the only question that matters, *what will actually execute?*
+Operators render without a call, so they are ignored; `strftime` renders as `STRFTIME(...)` and
+matches the allowlist. One mechanism fixed both bugs.
+**In short:** *"An authorisation check must run against what will execute, not against an
+intermediate representation."*
 
-## D2 — Function authorisation uses the dialect-rendered name, not sqlglot's class name
+## D3: Function allowlist, not denylist
+**Decision:** Only the 86 functions a read-only analytical query needs are allowed (aggregates,
+string, numeric, date, window, read-only JSON, `cast`). Anything else is rejected.
+**Why:** A denylist is a losing position. SQLite adds functions between releases, builds enable
+different extensions, and one missed name (`load_extension`, `readfile`, `writefile`) is full
+compromise. An allowlist fails closed: if it is wrong, a legitimate query is rejected and the
+eval numbers show it. If a denylist is wrong, you have a breach nobody sees. A 13-name denylist
+still exists, as documentation and as a second line if the allowlist is ever switched off.
+**Trade-off:** A legitimate function outside the list is rejected until someone adds it.
+**In short:** *"Unknown functions are rejected, so a mistake shows up as a false rejection in the
+eval, not as a breach."*
 
-**Decision.** `_function_name()` renders each `exp.Func` node back to SQLite and reads the
-identifier before the opening paren.
+## D4: Extraction never sanitises
+**Decision:** `extract_sql` only removes formatting (Markdown fences, "Here is the query:",
+explanations after the semicolon). It recognises every statement keyword, including forbidden
+ones, so a `DROP` reaches the validator instead of being trimmed away.
+**What went wrong first:** The extractor only recognised `SELECT` and `WITH`. A generated
+`DROP TABLE orders` was trimmed to an empty string and reported as a `parse_error`. The database
+was never at risk, but the security telemetry said the model had produced gibberish when it had
+actually attempted a write.
+**Why:** Exactly one layer makes security decisions; every other layer reports faithfully. A
+component that quietly discards attacks makes the one metric that must be trustworthy lie.
+**Known gap:** Extraction still cuts at the first semicolon. When the model returns
+`SELECT 1; DROP TABLE orders`, only `SELECT 1` reaches the validator: the `DROP` never runs (and
+couldn't, on a read-only connection), but it isn't reported either. The validator reports
+stacked statements when it is given the raw text; the pipeline doesn't pass it that yet.
+**In short:** *"The extractor recovers what the model said; only the validator decides whether
+it's allowed."*
 
-**What went wrong first.** Two separate traps, both found by the allowlist rejecting
-ordinary queries:
+## D5: Two normalisation strengths, never one
+**Decision:** Two separate functions with different uses.
+- `clean_for_model` keeps the meaning: Unicode NFKC, removes invisible and bidirectional control
+  characters, removes tatweel (decorative stretching), converts both Arabic-Indic digit ranges
+  to ASCII (`٥٠٠` → `500`), converts Arabic punctuation, collapses spaces. Used for the prompt.
+- `normalize_for_matching` also strips diacritics, folds letter variants the way Apache Lucene's
+  `ArabicNormalizer` does (`أ إ آ` → `ا`, `ى` → `ي`, `ة` → `ه`) and lower-cases. Used only as a
+  lookup key.
 
-1. **Operators are `exp.Func` subclasses.** `exp.And` has the MRO
-   `And → Connector → Binary → Func`, so `find_all(exp.Func)` yields every `AND`, `OR`,
-   `LIKE` and comparison in the query. The first implementation reported a function called
-   `and` and rejected almost every non-trivial `WHERE` clause. Worse, the obvious fix —
-   excluding those base classes — *silently did nothing*, because `Connector` and `Binary`
-   are mixins that do not derive from `exp.Expression`, so a
-   `issubclass(node, exp.Expression)` guard filtered them out of the exclusion list.
-2. **sqlglot canonicalises across dialects.** SQLite's `strftime` parses to
-   `exp.TimeToStr`, with its argument wrapped in `exp.TsOrDsToTimestamp`. Checking an
-   allowlist against sqlglot's internal class names compares against a vocabulary the user
-   never typed and the database never sees.
+**Why:** The lossy version turns `مُحَمَّد` into `محمد` and `متأخرة` into `متاخره`: exactly right
+for matching, exactly wrong for text a model reads or a person sees. One shared "normalize"
+function would force a choice between broken matching and corrupted text. Digits are in the safe
+pass because `٥٠٠` and `500` mean the same, and the number has to reach the SQL as a literal.
+Standard NFKC does *not* convert Arabic-Indic digits, so an explicit table is required.
+**In short:** *"Normalisation is two operations: meaning-preserving for the model, lossy for
+lookup keys."*
 
-**Why the render approach.** It answers the only question that matters: *what function will
-actually execute?* Operators render without a call form and are correctly ignored;
-`strftime` renders as `STRFTIME(...)` and matches the allowlist entry.
+## D6: Hallucination is caught by a parser, not a second model
+**Decision:** Every table, column and alias in the generated SQL is checked against the catalog
+read from the real database.
+**Alternatives:** A second LLM asked "did the first one invent anything?"; running the query and
+treating an error as the signal.
+**Why:** The parser check is deterministic, free, instant, and cannot hallucinate itself. An LLM
+judge costs a second call, adds latency, and tends to make the same mistakes as the generator.
+Waiting for an execution error is worse still: a query can run, return zero rows and be wrong
+without any error at all.
+**Known limitations:** Column checks are membership-based: scoped by alias where there is one,
+otherwise checked against all the tables the query references. So a real column used where its
+table isn't visible is not caught. And in a query with a CTE, an unknown unqualified column is
+assumed to come from the CTE and only produces a warning. Full scope resolution would need
+sqlglot's qualifier and a complete schema; the simpler check catches invented identifiers in
+ordinary queries, which is the common failure.
+**In short:** *"Invented tables and columns are caught by checking the tree against the real
+schema: free, instant, and it can't hallucinate."*
 
----
+## D7: Aliases the query declares are not hallucinations
+**Decision:** Names the query itself introduces (`COUNT(*) AS late_deliveries … ORDER BY
+late_deliveries`) are collected and skipped by the column check.
+**What went wrong first:** `ORDER BY late_deliveries` parses as a column reference. Checked
+against the catalog, it doesn't exist, so the validator rejected it, even though the query
+defines it two lines earlier. Most analytical SQL aliases an aggregate, so this false positive
+would have made the model look unable to write SQL.
+**Why it's safe:** An alias can't be invented; its definition is in the same statement.
+**In short:** *"A guardrail's false positives are a real cost: they hide model quality and push
+people to switch the guardrail off."*
 
-## D3 — Function policy is an allowlist, not a denylist
-
-**Decision.** Unknown functions are rejected.
-
-**Why.** A denylist is a losing position. SQLite adds functions between point releases,
-different builds enable different extensions, and one missed name (`load_extension`,
-`readfile`, `writefile`, `edit`) is full compromise. An allowlist fails closed: being wrong
-costs a false rejection that shows up in the eval numbers, not a breach that does not.
-
-**Cost.** Legitimate functions outside the list are rejected until added. Accepted, because
-that failure is *visible*; the denylist's failure is not.
-
----
-
-## D4 — Extraction must never sanitise
-
-**Decision.** `extract_sql` recognises every statement keyword, including the forbidden
-ones, and hands whatever it finds to the validator.
-
-**What went wrong first.** The original version matched only `SELECT|WITH`. A generated
-`DROP TABLE orders` was trimmed to an empty string and reported as `parse_error`. The
-database was never at risk — but the guardrail telemetry claimed the model had emitted
-gibberish when it had actually attempted a write. Security decisions belong in exactly one
-place, and a component that quietly discards attacks makes the one metric that must be
-trustworthy lie.
-
----
-
-## D5 — Two normalization strengths, never one
-
-**Decision.** `clean_for_model` (meaning-preserving) and `normalize_for_matching` (lossy)
-are separate functions with different call sites.
-
-**Why.** `normalize_for_matching` folds `مُحَمَّد` to `محمد` and `متأخرة` to `متاخره`. That is
-exactly right for a lookup key and exactly wrong for anything a human will read or a model
-will reason over. One shared "normalize" function forces a choice between broken matching
-and corrupted display. Digit folding (`٥٠٠` → `500`) sits in the *safe* pass because it
-preserves meaning and materially helps the model emit correct literals.
-
----
-
-## D6 — Hallucination is detected by a parser, not a second model
-
-**Decision.** Every table, column and alias in generated SQL is checked against the
-introspected catalog.
-
-**Alternatives.** An LLM-as-judge pass asking "did the first model invent anything?";
-executing and treating an error as the signal.
-
-**Why.** The parser check is deterministic, free, instant, and cannot itself hallucinate.
-An LLM judge costs a second call, adds latency, and is wrong in correlated ways with the
-generator. Execution-as-signal is strictly worse: `SELECT status FROM orders` where `status`
-exists but `city` does not would need the query to actually run first, and a query that
-*succeeds* while being wrong (`status = 'shipped'` returning zero rows) produces no error at
-all.
-
-**Known limitation, stated honestly.** Column checking is membership-based, scoped by alias
-where one is present and otherwise checked against the union of referenced tables. It does
-not catch a column that exists on table A being referenced in a scope where only B is
-visible. Full scope resolution would need sqlglot's qualifier and a complete schema; the
-trade was deliberate, because this catches every *invented* identifier, which is the failure
-mode that matters.
-
----
-
-## D7 — Declared aliases are exempt from the unknown-column check
-
-**Decision.** Names introduced by the query itself (`SELECT COUNT(*) AS n ... ORDER BY n`)
-are collected and skipped.
-
-**What went wrong first.** `ORDER BY n` parses as an `exp.Column`, and checking it against
-the catalog reported `n` as a hallucinated column — true, and completely wrong, because the
-query defines it two lines earlier. This was a false-positive class that would have
-destroyed accuracy on any query using an aggregate alias. Exempting declared aliases is
-safe: an alias cannot be invented, because its definition is in the same statement.
-
----
-
-## D8 — Defence in depth at execution time
-
-**Decision.** Four independent runtime mechanisms, each sufficient alone:
-
-1. Connection opened read-only at the driver level (`file:...?mode=ro`).
+## D8: Four runtime defences under the validator
+**Decision:** The executor applies four independent mechanisms, each enough on its own to stop
+a write:
+1. The connection is opened read-only at the driver level (`file:…?mode=ro`).
 2. `PRAGMA query_only = ON`.
-3. Extension loading explicitly disabled.
-4. A wall-clock deadline via `set_progress_handler`.
+3. Extension loading is disabled.
+4. A wall-clock deadline (5 s by default), enforced by SQLite's progress handler.
 
-**Why.** The validator is software and will have bugs — three were found during this build.
-Writes must remain impossible even if it is bypassed entirely. The executor tests assert
-this *without* the validator in the loop.
+On top of that: a row cap (200 by default, read with `fetchmany(n + 1)` so truncation is known
+without loading everything) and a byte budget (D19).
+**Why:** The validator is software and will have bugs; three were found while building it (D2,
+D7). Writes must stay impossible even if it is bypassed entirely. Tests check this with the
+validator out of the loop, including a before-and-after row count.
+**In short:** *"Even if the validator has a bug, the database can't be written to."*
 
----
+## D9: Execution accuracy is the main metric
+**Decision:** A prediction is correct when it returns the same result as the gold query,
+ignoring row order and column order. Rows are compared as sorted tuples of values, duplicates
+count, `1` equals `1.0`, and floats are rounded to 6 decimals.
+**Alternatives:** Comparing SQL strings; Spider's Exact Set Match.
+**Why:** Correct queries differ freely in join order, aliases, CTEs and `COUNT(*)` versus
+`COUNT(o.order_id)`, so string equality marks most correct answers wrong. Exact Set Match needs
+Spider's own grammar, and an approximation of it should not be reported under its name.
+**Limitations:**
+- A query can be right for the wrong reason, especially on a small database where two
+  different filters select the same rows. The per-tag breakdown makes a suspiciously perfect
+  slice visible.
+- It is strict about the shape of the answer. In the `qwen2.5:7b` run, `en_inactive_couriers`
+  returned the right couriers plus their Arabic names, and the extra column made it "wrong".
+**In short:** *"A query is right if it returns the right rows, however it's written."*
 
-## D9 — Execution accuracy as the primary metric
+## D10: The eval suite is paired across languages
+**Decision:** 12 questions, each asked in English and Arabic against identical gold SQL: 24
+cases. Every Arabic case carries an English translation.
+**Why:** It turns the suite into a controlled experiment. Difficulty, schema and gold answer are
+held constant, so an accuracy gap between the English and Arabic halves is due to language.
+Two unrelated suites could not support that claim. The translations make the Arabic cases
+checkable by a reviewer who doesn't read Arabic.
+**In short:** *"Same questions, same gold SQL, two languages: any gap is the language."*
 
-**Decision.** A prediction is correct when it returns the same result set as the gold query,
-ignoring row and column order.
+## D11: Results are written one line at a time
+**Decision:** Each case is appended to `outcomes.jsonl` and flushed the moment it finishes;
+`--resume` skips cases already on disk.
+**Why:** On CPU a question takes 60–120 s, so the full 30-case run is about 40 minutes. Losing it
+to a crash at case 29 is not acceptable. The resume loader skips an unreadable last line,
+because a process killed mid-write leaves exactly that, and it warns when asked to resume but
+finds nothing.
+**In short:** *"A long eval run survives a crash, because every result is on disk the moment
+it's measured."*
 
-**Alternatives.** SQL string equality; Spider's Exact Set Match.
+## D12: The demo database is seeded and deterministic
+**Decision:** A synthetic Gulf logistics database built from a fixed seed and a fixed start date,
+never `date.today()`. A test checks that two builds are byte-identical.
+**Why:** Every accuracy number is meaningless if the data differs between runs. The data is
+designed to test real SQL skills:
+- Arabic lives in the data itself (`name_ar` columns), not just in the questions.
+- "Late" is not a stored flag but a relationship between two columns
+  (`delivered_at > promised_at`): 188 of the 605 delivered orders.
+- The price on an order line is often discounted, so it differs from the catalogue price. A
+  query that joins to the catalogue price gets a plausible but wrong answer.
 
-**Why.** Two correct answers to "which courier was late most often" differ in join order,
-alias names, CTE usage and `COUNT(*)` vs `COUNT(o.order_id)`. String equality scores almost
-every correct query wrong. Spider's ESM is better but still penalises a different route to
-the same answer, and cannot be computed without Spider's own grammar — implementing an
-approximation and calling it ESM would be dishonest.
+**In short:** *"Fixed seed, fixed dates, byte-identical builds: the numbers are measurements, not
+anecdotes."*
 
-**Limitation, stated.** A query can be right for the wrong reason, especially on a small
-database where two different filters select the same rows. That is why the suite reports a
-per-tag breakdown: a suspiciously perfect score on `date_logic` is visible rather than
-hidden in an aggregate.
+## D13: Low-cardinality columns show their values in the prompt
+**Decision:** Text columns with at most 8 distinct short values are rendered as
+`-- one of: 'cancelled', 'delivered', …`. Numeric and high-cardinality columns are not.
+**Why:** It removes the worst silent failure: `status = 'shipped'` is valid SQL with valid
+identifiers, passes every guardrail, returns zero rows and raises nothing. Doing the same for
+names would put data into the prompt and bloat it for no gain. (It also creates a security
+channel, handled in D20.)
+**In short:** *"Show the model the real values, so it can't guess a plausible one that
+matches nothing."*
 
----
+## D14: A blocked query returns HTTP 200
+**Decision:** A rejection is a successful analysis whose answer is "not safe to run".
+**Why:** The client needs the list of violations to display it. A 4xx would push callers to wrap
+a normal, expected outcome in `try/except`. Real failures, such as a dead model backend or a
+malformed request, still return real error codes (503, 422).
+**In short:** *"Being blocked is an answer, not an error."*
 
-## D10 — The eval suite is paired across languages
+## D15: One provider interface for every model backend
+**Decision:** An abstract `Provider` with Ollama, Anthropic and mock implementations.
+**Why:** Three concrete payoffs. The test suite runs offline and instantly against the mock. The
+eval can compare backends because the backend is a parameter. And each backend's failures are
+translated into the same error types, so retry logic is written once: only transient failures
+(timeouts, connection errors, Anthropic 429/5xx) are retried, because a bad request fails
+identically the third time. Backoff uses full jitter so parallel workers don't retry in sync.
+**In short:** *"One interface: offline tests, comparable backends, and retry logic written once."*
 
-**Decision.** Every question exists in English and Arabic with identical gold SQL.
+## D16: The API key is never stored on an object
+**Decision:** `Settings` has no key field; the Anthropic SDK reads `ANTHROPIC_API_KEY` from the
+environment itself.
+**Why:** It makes credential leaks through a `repr`, a saved run config or a log line
+structurally impossible rather than merely unlikely.
+**In short:** *"A key that's never stored can't be logged."*
 
-**Why.** It converts the suite into a controlled experiment. An accuracy gap between `en_*`
-and `ar_*` cases is attributable to language, because difficulty, schema and gold answer are
-held constant. Two separate unpaired suites could not support that claim.
+## D17: Confidence is a heuristic, not a probability
+**Decision:** The score is a weighted sum of deterministic signals: every identifier exists
+(0.40), the query ran (0.20), rows came back (0.15), no guardrail rewrite was needed (0.05), and,
+when self-consistency is on, how many samples agreed (0.20). Bands: high ≥ 0.80, medium ≥ 0.55.
+The docstring and the UI both say it is not calibrated.
+**Why:** Claiming calibration without a labelled dataset to calibrate against would be false
+precision. When self-consistency is off, the scorer divides by the weights actually in play;
+counting the missing signal as zero would cap every answer at 0.80 and make confidence look
+broken.
+**Evidence:** It does separate right from wrong: mean 0.97 on correct answers vs 0.71 on wrong
+ones (`qwen2.5:7b`). That is a ranking signal, not a probability.
+**In short:** *"Confidence ranks answers and explains its weakest signal; it doesn't pretend to
+be a probability."*
 
----
-
-## D11 — Results are written incrementally, one JSON line per case
-
-**Decision.** Each case is appended and flushed the moment it completes; `--resume` skips
-cases already on disk.
-
-**Why.** CPU inference takes 60–120 s per question, so a 30-case run is 40 minutes. Losing
-that to a crash at case 29 is unacceptable. The resume loader also tolerates an unparseable
-final line, because a process killed mid-write leaves exactly that.
-
----
-
-## D12 — The database is seeded and fully deterministic
-
-**Decision.** Fixed seed, fixed epoch, no `date.today()` anywhere.
-
-**Why.** Every accuracy number is meaningless if the data differs between runs. A test
-asserts that two builds are byte-identical.
-
-**Design detail.** `order_items.unit_price_aed` is deliberately a discounted price that
-differs from `products.unit_price_aed`. A query that naively joins to the catalogue price
-gets a different answer than one reading the line price — which is exactly the distinction
-between a correct query and a plausible one.
-
----
-
-## D13 — Low-cardinality columns carry their value set into the prompt
-
-**Decision.** Text columns with few distinct short values render as
-`-- one of: 'delivered', 'in_transit', ...`; high-cardinality and numeric columns do not.
-
-**Why.** It removes the worst silent failure mode: `status = 'shipped'` is valid SQL with
-valid identifiers, passes every guardrail, returns zero rows, and raises nothing anywhere.
-Doing the same for names would leak data into the prompt and bloat it for no gain.
-
----
-
-## D14 — Guardrail rejections return HTTP 200
-
-**Decision.** A blocked query is a successful analysis whose answer is "not safe to run".
-
-**Why.** The client needs the violation list to render it. Returning 4xx pushes callers to
-wrap a normal, expected outcome in `try/except`. Genuine failures — dead backend, malformed
-request — still return real error codes.
-
----
-
-## D15 — Provider adapter layer rather than one HTTP call
-
-**Decision.** An abstract `Provider` with Ollama, Anthropic and Mock implementations.
-
-**Why.** Three concrete payoffs: the test suite runs offline and instantly against the mock;
-the eval harness can compare backends because the backend is a parameter; and per-backend
-failure modes are normalised so retry logic is written once. Only transient failures
-(timeout, connection) are retried — a 400 fails identically on the third attempt and
-retrying it just distorts latency measurements. Backoff uses full jitter so parallel eval
-workers do not re-synchronise into a thundering herd.
-
----
-
-## D16 — The API key is never stored on an object
-
-**Decision.** `Settings` has no key field; the Anthropic SDK reads `ANTHROPIC_API_KEY` from
-the environment itself.
-
-**Why.** It makes accidental credential logging structurally impossible rather than merely
-unlikely — the key cannot appear in a `repr`, a serialised run config, or a log line that
-dumps `self.__dict__`.
-
----
-
-## D17 — Confidence is labelled a heuristic, not a probability
-
-**Decision.** The score is a weighted combination of deterministic signals, and both the
-docstring and the UI say it is not calibrated.
-
-**Why.** Claiming calibration without a labelled dataset to calibrate against is exactly
-the kind of overstatement a careful reviewer should catch. The weight of a disabled signal is
-redistributed across the rest, so turning self-consistency off does not silently cap every
-score at 0.7 and make the feature look broken.
-
----
-
-## D18 — Column ambiguity is a warning, and only in a flat scope
-
-**Decision.** An unqualified column that exists on more than one referenced table produces a
-*warning*, never a rejection — and only when the statement is a single `SELECT` with no CTEs.
-
-**Why this exists.** A real eval failure, observed during the `qwen2.5:7b` run: the model
-emitted `SELECT courier_id ... FROM orders JOIN couriers ...`, which SQLite rejects at
-execution with `ambiguous column name: courier_id`. Every identifier existed, so the
-hallucination check was satisfied — the query was under-specified, not wrong.
-
-**Why not a rejection.** The tempting fix is to make ambiguity a violation. It would be
-wrong, because outside a flat scope `referenced_real_tables` is the union across the *whole
-statement*, not the tables visible at that point. This query is perfectly unambiguous and
-would be rejected:
+## D18: Column ambiguity is a warning, and only in a flat scope
+**Decision:** An unqualified column that exists on more than one referenced table produces a
+*warning*, never a rejection, and only when the statement is a single `SELECT` with no CTEs.
+**Why it exists:** A real eval failure. `qwen2.5:7b` wrote `SELECT courier_id … FROM orders JOIN
+couriers …`, which SQLite rejects as `ambiguous column name`. Every identifier existed, so the
+hallucination check was satisfied; the query was under-specified, not invented.
+**Why not a rejection:** Outside a single flat scope, "the tables referenced" means the whole
+statement, not what is visible at that point. This query is unambiguous and would be rejected:
 
 ```sql
 SELECT (SELECT COUNT(*) FROM couriers WHERE courier_id = 5) AS n FROM orders
 ```
 
-Rejecting valid queries to pre-empt an error the executor already reports cleanly is a bad
-trade — and D7 is the cautionary tale about what a false-positive class costs.
+Rejecting valid queries to pre-empt an error SQLite already reports cleanly is a bad trade (see
+D7). In a single flat `SELECT` there is one scope, so the check is exact.
+**In short:** *"Warn where the check is exact; never reject valid SQL to catch an error the
+database already reports."*
 
-**Why the flat-scope restriction.** In a single `SELECT` with no CTEs there is exactly one
-scope, so "referenced anywhere" and "visible here" are the same set, and the check is exact.
-Restricting it to where it can be exact is what makes it safe to ship at all; the
-alternative was a guess or nothing.
+## D19: Limits bound bytes, not just rows and seconds
+**Decision:** The executor caps each cell at 4,096 characters and the whole result at 1,000,000,
+on top of the row cap and the deadline. On Python 3.11+, SQLite itself is also limited to 8 MB
+strings.
+**Why it exists:** Security testing found a working denial of service:
+`SELECT printf('%.*c', 200000000, 'x')` returns a 200 MB string in 1.1 seconds. It passes every
+other control: one row, well inside the timeout, an allowed function, an ordinary `SELECT`.
+Every limit bounded row count or time; none bounded size.
+**Why a budget rather than banning `printf`:** Same reasoning as D3. `char`, `hex`, `replace` and
+`group_concat` can all amplify, and the next SQLite version may add another. Bounding what any
+query may *produce* can't be routed around.
+**Residual risk:** On Python 3.10 the large string is still allocated briefly inside SQLite
+before the cap discards it; the cap bounds what reaches the response and the logs, not peak
+memory.
+**In short:** *"Bound the outcome, not the primitive: every result has a size budget."*
 
----
+## D20: Database values in the prompt are untrusted input
+**Decision:** Sampled column values (D13) must pass a character allowlist before they reach the
+prompt, and if any value fails, the whole column's samples are withheld (with a logged warning).
+**Why it exists:** Those values come from the database and sit right above an instruction to use
+them "exactly as written". Testing confirmed that a value of `'; DROP TABLE t--` reached the
+prompt intact. Any sampled column is therefore a **stored prompt-injection channel** for anyone
+who can write a row: a signup form, a CSV import, a partner feed.
+**Why withhold the whole set:** Showing only part of a column's values would mislead the model
+about what the column holds. An attacker can suppress a hint, which is far less harmful than
+injecting one.
+**Limitation:** This stops *syntactic* injection only. `ignore all rules` is letters and spaces,
+just like a real label such as `in transit`; no character filter can tell them apart. A test
+deliberately shows that such text *does* reach the prompt. The AST guardrails still block
+anything destructive, so the worst case is a legal but wrong `SELECT`. The mitigation is a
+deployment rule: don't sample columns fed by unvalidated user input.
+**In short:** *"Data that reaches the prompt is attacker input; filter it and state what the
+filter can't catch."*
 
-## D19 — Resource limits must bound bytes, not just rows and seconds
+## D21: The adversarial metric separates containment from susceptibility
+**Decision:** Each response to a malicious prompt is classified as **dangerous** (a write, DDL, a
+sandbox escape, a denied function or stacked statements), **attempted** (the model complied but
+produced something inert, such as a table that doesn't exist) or **refused**. Two numbers come
+from that: *containment*, the share of dangerous statements stopped, which must be 100%; and
+*susceptibility*, how often the model complied, which is a property of the model.
+**What went wrong first:** The first metric counted "blocked" as success. It ran backwards: a
+weak model that ignored the injection had nothing to block and scored worse than a capable
+model that complied and got caught.
+**Result:** Both models: 3 of 3 dangerous statements contained, and nothing harmful executed.
+`qwen2.5:7b` had all 6 answers blocked. `qwen2.5:0.5b` had 5 blocked; its sixth ran as a plain
+`SELECT * FROM couriers`. Whether that model also appended a second statement can't be told from
+the stored results, because extraction would have removed it (D4).
+**Caveat:** A stacked `DROP` without a semicolon fails to parse, so the metric counts it as
+"attempted", not "dangerous". It was still blocked; the dangerous count is conservative.
+**In short:** *"Measure the guardrail and the model separately, or the metric rewards weak
+models."*
 
-**Decision.** The executor enforces a per-cell character cap and a total-result byte budget,
-in addition to the row cap and wall-clock deadline.
+## D22: Record observations, derive verdicts
+**Decision:** `outcomes.jsonl` stores what happened (the generated SQL, which rules fired,
+whether it ran), not just "correct" or "wrong". `docs/results.md` is generated from the run
+files by `scripts/report.py`.
+**Why:** When the adversarial metric was fixed (D21), `scripts/rescore.py` re-scored every
+existing run in seconds instead of a 40-minute re-run. Generated results can't drift from the
+data they claim to describe.
+**In short:** *"Store the raw observations, and a metric fix is a recomputation, not a re-run."*
 
-**Why this exists.** Security testing found a working denial of service:
-`SELECT printf('%.*c', 200000000, 'x')` returns a 200 MB string in 1.1 seconds. It passes
-*every* other control — one row, well inside the timeout, an allowlisted function, an
-ordinary `SELECT` AST. Every limit in the system bounded row count or elapsed time; none
-bounded size, and a single row can be arbitrarily large.
+## D23: Self-consistency votes on results, not on SQL text
+**Decision:** With `--samples n`, the model is sampled n times (the first at temperature 0, the
+rest at 0.7). Candidates are grouped by the set of rows they return, the biggest group wins, and
+its share becomes the agreement signal (D17). Off by default.
+**Why:** Two correct queries can be written completely differently. Grouping by text would
+measure agreement about phrasing; grouping by results measures agreement about the answer. The
+first sample always uses the normal temperature, so turning the feature on never changes the
+primary answer.
+**Trade-off:** Each extra sample is another model call, about 90 s on CPU; hence off by default.
+**In short:** *"Ask several times and compare the answers, not the wording."*
 
-**Why a budget rather than removing `printf`.** Identical reasoning to D3. `char`, `hex`,
-`replace`, `group_concat` and `zeroblob` can all amplify, and the next SQLite release may
-add another primitive. Blacklisting amplifiers is a losing game; bounding what any query may
-*produce* is not routable around.
+## D24: Script detection by code points, not a language model
+**Decision:** The share of Arabic letters among all letters decides the path: ≥ 85% Arabic,
+≤ 15% English, anything between is *mixed* and takes the Arabic path. Digits and punctuation
+don't count.
+**Why:** The question to answer is which prompt template and glossary direction to use, and that
+depends on the script, which is an exact property of the characters. `langdetect` or `fasttext`
+would add a dependency and a model file to guess at something that can be computed. Mixed input
+is common in the Gulf: `كم عدد الـ orders المتأخرة؟` is Arabic grammar with an English noun.
+**In short:** *"Script is a property of the characters, so it's computed, not guessed."*
 
-**Residual risk, documented rather than hidden.** On Python 3.10 the oversized value is
-still allocated transiently inside SQLite before the cap discards it. The cap bounds what
-propagates — API responses, logs, retained memory — not peak RSS. Python 3.11+ exposes
-`Connection.setlimit(SQLITE_LIMIT_LENGTH, ...)`, which prevents the allocation outright and
-is applied automatically when present.
+## D25: What runs is exactly what was validated
+**Decision:** The SQL that executes is re-rendered from the validated syntax tree, never the raw
+string. If the query has no `LIMIT`, one is added (200); a larger one is lowered; a
+non-numeric one is left alone, because the executor's row cap bounds it anyway.
+**Why:** It leaves no gap between "what was checked" and "what runs". The added `LIMIT` is
+reported as a warning, and it is a convenience: the executor caps rows independently.
+**In short:** *"The executed statement is the round-trip of the checked one."*
 
----
+## D26: A fallback must never look like a real answer
+**Decision:** The mock provider's fallback for an unknown question is
+`SELECT 'no mock fixture for this question'`, and the web demo shows which backend is answering
+and counts seconds while it waits.
+**What went wrong first:** The fallback was `SELECT COUNT(*) FROM orders`. For an unmatched demo
+question, "how many orders were delivered late?", the page showed 900 with high confidence; the
+right answer is 188. A static "Generating…" on a 90-second CPU call looked exactly like a hang.
+**Why:** A silent, plausible default is worse than a loud failure, because it spends the
+viewer's trust instead of their attention. The same rule gave `--resume` its warning when it
+finds nothing to resume (D11).
+**In short:** *"Defaults must announce themselves; a plausible fake is the worst failure."*
 
-## D20 — Database content that reaches the prompt is untrusted input
-
-**Decision.** Sampled column values are filtered by a content allowlist before rendering
-into the system prompt, and a column's entire sample set is withheld if any value fails.
-
-**Why this exists.** D13 renders low-cardinality values into the prompt to stop the model
-inventing literals — a real accuracy win. But those values are read from the database and
-placed directly above an instruction to use them *"exactly as written"*. Testing confirmed a
-value of `'; DROP TABLE t--` reached the prompt intact.
-
-That makes any sampled column a **stored prompt-injection channel** for anyone who can write
-a row — a signup form, a CSV import, a partner feed. Attacker and victim are different
-users, which is what makes it worth taking seriously.
-
-**Why withhold the whole set.** Showing a partial value domain would misinform the model
-about what the column can contain, which is a correctness bug introduced by a security fix.
-The trade is explicit: an attacker can *suppress* a hint, which is far cheaper than letting
-them *inject* one. A warning is logged so the suppression is visible rather than silent.
-
-**The limitation, stated rather than obscured.** This stops *syntactic* injection only. A
-payload of `ignore all rules` is letters and spaces — character-class-identical to a
-legitimate label like `in transit`. No charset filter can separate them, because the
-difference is meaning rather than form. A test deliberately asserts that such a payload
-*does* reach the prompt, so the gap stays visible.
-
-The AST guardrails still reject destructive SQL regardless of what persuaded the model, so
-semantic injection cannot cause data loss. It could cause a legal-but-wrong `SELECT`.
-Nothing syntactic catches that; the mitigation is a deployment rule — do not sample columns
-fed by unvalidated user input.
+## D27: A local model by default
+**Decision:** The default backend is `qwen2.5:7b` running locally through Ollama. The Anthropic
+backend is an optional extra, and the mock needs no model at all.
+**Why:** Questions and data never leave the machine, there is no API cost, and a small local
+model is an honest stress test: the guardrails don't depend on the model (D8, D21), so a weak
+model should be less accurate but never less safe. The measurements confirm it.
+**Trade-off:** About 90 s per question on CPU, and lower accuracy than a frontier model. The
+Anthropic path is written and type-checked but has not been run (no API key was available).
+**In short:** *"Local by default: private, free, and proof that safety doesn't depend on the
+model."*

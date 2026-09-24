@@ -48,7 +48,7 @@ logger = get_logger("db.spider")
 #: To install Spider by hand::
 #:
 #:     # download spider.zip from https://yale-lily.github.io/spider
-#:     unzip spider.zip -d /mnt/data/mizan/data/
+#:     unzip spider.zip -d data/
 #:     # expected result: data/spider/database/<db_id>/<db_id>.sqlite  +  data/spider/dev.json
 #:
 #: ``find_local`` picks it up automatically from there and nothing else needs changing.

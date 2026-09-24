@@ -109,7 +109,7 @@ def score_answer(
     ``agreement`` is ``None`` when self-consistency is disabled (``self_consistency_n=1``).
     Its weight is then redistributed proportionally across the remaining signals rather
     than counted as zero — otherwise turning the feature off would cap every answer's score
-    at 0.7 and make confidence look broken.
+    at 0.80 and make confidence look broken.
     """
     signals: list[Signal] = [
         Signal(

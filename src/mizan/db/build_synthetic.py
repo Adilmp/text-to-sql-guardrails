@@ -13,7 +13,7 @@ Why seeded and fully deterministic
 Every eval number in the README is meaningless if the database differs between runs. The
 generator is seeded once, uses no wall-clock time, and derives all dates from a fixed
 epoch, so ``build_synthetic.py`` produces a byte-identical database on any machine. This is
-the difference between "82% execution accuracy" being a measurement and being an anecdote.
+the difference between an execution-accuracy figure being a measurement and an anecdote.
 """
 
 from __future__ import annotations

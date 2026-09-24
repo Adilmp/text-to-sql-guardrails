@@ -156,24 +156,35 @@ Tested and blocked. Tests pin each so a refactor cannot quietly regress them.
 ## 4. Known limitations
 
 1. **Semantic prompt injection** (§2.2) — cannot be caught syntactically.
-2. **Column scope resolution** is membership-based. It catches every *invented* identifier
-   but not a real column referenced where it is not visible. See `DECISIONS.md` D6.
+2. **Column scope resolution** is membership-based. It catches invented identifiers in ordinary
+   queries, but not a real column referenced where it is not visible, and inside a query with a
+   CTE an unknown unqualified column only produces a warning. See `DECISIONS.md` D6.
 3. **Peak allocation on Python 3.10** (§2.1).
 4. **No authentication, authorisation or rate limiting.** Local single-user tool.
 5. **`/api/schema` deliberately exposes** the schema and low-cardinality sample values. It
    is a demo endpoint; it would not ship as-is.
 6. **Dialectal Arabic is untested.** The suite is Modern Standard Arabic.
+7. **The demo page's CSP allows inline script and style** (`'unsafe-inline'`), because the page
+   is a single self-contained file. `connect-src 'self'` still stops injected script from
+   reaching another host; moving the script and styles into separate files would allow dropping
+   `'unsafe-inline'`.
+8. **Stacked statements in model output are trimmed, not reported.** The extractor cuts at the
+   first semicolon, so in `SELECT 1; DROP TABLE t` only `SELECT 1` reaches the validator. The
+   second statement never executes (and the connection is read-only regardless), but the
+   pipeline does not record it as an attack. The validator itself does flag stacked
+   statements when given the raw text. See `DECISIONS.md` D4.
 
 ---
 
 ## 5. Running the security tests
 
 ```bash
-cd /mnt/data/mizan && source .venv/bin/activate && python -m pytest tests/test_security.py -v
+uv run pytest tests/test_security.py -v
 ```
 
-46 tests across schema exfiltration, resource exhaustion, stored prompt injection,
-driver-level write protection, obfuscation and API input bounds.
+52 tests across schema exfiltration, resource exhaustion, stored prompt injection,
+driver-level write protection, obfuscation, identifier quoting, API input bounds and security
+headers.
 
 ---
 
