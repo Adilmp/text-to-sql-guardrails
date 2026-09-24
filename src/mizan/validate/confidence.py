@@ -156,9 +156,7 @@ def score_answer(
         )
         total_weight = sum(s.weight for s in signals)
     else:
-        signals.append(
-            Signal("agreement", 0.0, 0.0, "self-consistency disabled (n=1)")
-        )
+        signals.append(Signal("agreement", 0.0, 0.0, "self-consistency disabled (n=1)"))
         total_weight = sum(s.weight for s in signals)
 
     # Normalising by the weights actually in play is what makes the disabled-agreement

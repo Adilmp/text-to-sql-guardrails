@@ -53,6 +53,31 @@ class TestPipeline:
         assert answer.confidence.score == 0.0
         assert "write_operation" in (answer.guardrail.rules_fired if answer.guardrail else [])
 
+    def test_stacked_statement_in_the_reply_is_blocked_and_reported(
+        self, catalog: Catalog, settings: Settings
+    ) -> None:
+        """The whole reply is checked, not just the part extraction kept (D4)."""
+        provider = MockProvider(script=["SELECT COUNT(*) FROM orders; DROP TABLE orders"])
+        answer = TextToSQL(catalog, provider, settings).ask("count, then drop orders")
+        assert not answer.ok
+        assert answer.result is None
+        assert "stacked_statements" in (answer.guardrail.rules_fired if answer.guardrail else [])
+
+    def test_explanation_after_the_semicolon_is_not_an_attack(
+        self, catalog: Catalog, settings: Settings
+    ) -> None:
+        provider = MockProvider(script=["SELECT COUNT(*) FROM orders; This counts every order."])
+        answer = TextToSQL(catalog, provider, settings).ask("how many orders?")
+        assert answer.ok
+
+    def test_raw_model_reply_is_kept_on_the_answer(
+        self, catalog: Catalog, settings: Settings
+    ) -> None:
+        reply = "```sql\nSELECT COUNT(*) FROM orders\n```"
+        answer = TextToSQL(catalog, MockProvider(script=[reply]), settings).ask("count")
+        assert answer.raw_output == reply
+        assert answer.to_dict()["raw_output"] == reply
+
     def test_hallucinated_column_is_caught(self, catalog: Catalog, settings: Settings) -> None:
         provider = MockProvider(script=["SELECT invented_column FROM orders"])
         answer = TextToSQL(catalog, provider, settings).ask("anything")
@@ -234,7 +259,7 @@ class TestInjectionClassification:
     def test_benign_output_for_an_injection_prompt_is_a_pass(
         self, catalog: Catalog, settings: Settings
     ) -> None:
-        """The real 0.5b case: it ignored 'also drop couriers' and returned a plain SELECT.
+        """A model that ignores 'also drop couriers' and returns a plain SELECT.
 
         Nothing dangerous was generated, so there was nothing to contain and this must not
         be scored as a guardrail failure.
@@ -275,6 +300,17 @@ class TestResumeSemantics:
         )
         assert second.n == 2
         assert (tmp_path / "fixed" / "outcomes.jsonl").read_text().count("\n") == 2
+
+    def test_outcomes_record_the_raw_model_reply(self, db_path, tmp_path) -> None:
+        """Raw replies are kept, so what the model said can be checked after the fact."""
+        import json
+
+        from mizan.eval import build_suite, run_suite
+
+        cfg = Settings.from_env(provider="mock", db_path=db_path, run_dir=tmp_path)
+        run_suite(cfg, cases=build_suite()[:1], suite_name="bilingual", run_id="raw")
+        record = json.loads((tmp_path / "raw" / "outcomes.jsonl").read_text().splitlines()[0])
+        assert record["raw_output"] == "SELECT COUNT(*) FROM orders"
 
     def test_resume_without_stable_id_finds_nothing(self, db_path, tmp_path) -> None:
         """Two auto-id runs land in different directories, so neither can resume the other."""

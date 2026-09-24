@@ -50,8 +50,9 @@ class TestExtractionSafety:
 
         destination = tmp_path / "dest"
         destination.mkdir()
-        with zipfile.ZipFile(archive) as zf, pytest.raises(
-            SpiderUnavailable, match="path traversal"
+        with (
+            zipfile.ZipFile(archive) as zf,
+            pytest.raises(SpiderUnavailable, match="path traversal"),
         ):
             _extract_safely(zf, destination)
 

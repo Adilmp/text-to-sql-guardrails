@@ -78,6 +78,9 @@ class Answer:
     error: str | None = None
     candidates: list[Candidate] = field(default_factory=list)
     agreement: float | None = None
+    #: The model's reply exactly as received, before extraction. Kept so an answer can be
+    #: audited later: what the model *said*, not just what was run.
+    raw_output: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -98,6 +101,7 @@ class Answer:
             "error": self.error,
             "agreement": self.agreement,
             "n_candidates": len(self.candidates),
+            "raw_output": self.raw_output,
         }
 
 
@@ -161,6 +165,7 @@ class TextToSQL:
                 error="; ".join(str(v) for v in chosen.guardrail.violations),
                 candidates=candidates,
                 agreement=agreement,
+                raw_output=chosen.raw_text,
             )
 
         confidence = score_answer(
@@ -185,6 +190,7 @@ class TextToSQL:
             error=chosen.error,
             candidates=candidates,
             agreement=agreement,
+            raw_output=chosen.raw_text,
         )
 
     # ------------------------------------------------------------------ internals
@@ -206,7 +212,7 @@ class TextToSQL:
                 max_tokens=self.settings.max_output_tokens,
             )
             sql = extract_sql(completion.text)
-            report = validate(sql, self.catalog, self.policy)
+            report = validate(sql, self.catalog, self.policy, raw_output=completion.text)
             candidate = Candidate(raw_text=completion.text, sql=sql, guardrail=report)
 
             if report.ok:

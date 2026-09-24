@@ -54,9 +54,7 @@ class OllamaProvider(Provider):
         }
         started = time.perf_counter()
         try:
-            response = httpx.post(
-                f"{self.host}/api/chat", json=payload, timeout=self.timeout_s
-            )
+            response = httpx.post(f"{self.host}/api/chat", json=payload, timeout=self.timeout_s)
         except httpx.TimeoutException as exc:
             raise ProviderTimeout(
                 f"ollama timed out after {self.timeout_s}s", model=self.model

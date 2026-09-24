@@ -117,16 +117,34 @@ CITIES: tuple[tuple[str, str, str], ...] = (
 )
 
 FIRST_NAMES: tuple[tuple[str, str], ...] = (
-    ("Ahmed", "أحمد"), ("Fatima", "فاطمة"), ("Omar", "عمر"), ("Layla", "ليلى"),
-    ("Yousef", "يوسف"), ("Noura", "نورة"), ("Khalid", "خالد"), ("Maryam", "مريم"),
-    ("Saeed", "سعيد"), ("Hessa", "حصة"), ("Rashid", "راشد"), ("Amal", "أمل"),
-    ("Tariq", "طارق"), ("Salma", "سلمى"), ("Bilal", "بلال"), ("Huda", "هدى"),
+    ("Ahmed", "أحمد"),
+    ("Fatima", "فاطمة"),
+    ("Omar", "عمر"),
+    ("Layla", "ليلى"),
+    ("Yousef", "يوسف"),
+    ("Noura", "نورة"),
+    ("Khalid", "خالد"),
+    ("Maryam", "مريم"),
+    ("Saeed", "سعيد"),
+    ("Hessa", "حصة"),
+    ("Rashid", "راشد"),
+    ("Amal", "أمل"),
+    ("Tariq", "طارق"),
+    ("Salma", "سلمى"),
+    ("Bilal", "بلال"),
+    ("Huda", "هدى"),
 )
 
 LAST_NAMES: tuple[tuple[str, str], ...] = (
-    ("Al Mansouri", "المنصوري"), ("Al Farsi", "الفارسي"), ("Al Qassimi", "القاسمي"),
-    ("Al Harbi", "الحربي"), ("Al Otaibi", "العتيبي"), ("Al Thani", "آل ثاني"),
-    ("Al Balushi", "البلوشي"), ("Al Sabah", "الصباح"), ("Al Khalifa", "آل خليفة"),
+    ("Al Mansouri", "المنصوري"),
+    ("Al Farsi", "الفارسي"),
+    ("Al Qassimi", "القاسمي"),
+    ("Al Harbi", "الحربي"),
+    ("Al Otaibi", "العتيبي"),
+    ("Al Thani", "آل ثاني"),
+    ("Al Balushi", "البلوشي"),
+    ("Al Sabah", "الصباح"),
+    ("Al Khalifa", "آل خليفة"),
 )
 
 SEGMENTS = ("enterprise", "sme", "retail")

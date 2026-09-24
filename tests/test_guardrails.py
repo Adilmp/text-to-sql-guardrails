@@ -12,7 +12,13 @@ from __future__ import annotations
 
 import pytest
 
-from mizan.guardrails import GuardrailPolicy, extract_sql, has_multiple_statements, validate
+from mizan.guardrails import (
+    GuardrailPolicy,
+    extract_sql,
+    find_stacked_statement,
+    has_multiple_statements,
+    validate,
+)
 from mizan.guardrails.validator import _collect_functions, parse_sql
 from mizan.schema import Catalog
 
@@ -40,8 +46,7 @@ ATTACKS: list[tuple[str, str, str]] = [
 LEGITIMATE: list[tuple[str, str]] = [
     (
         "boolean operators",
-        "SELECT COUNT(*) FROM orders "
-        "WHERE delivered_at IS NOT NULL AND delivered_at > promised_at",
+        "SELECT COUNT(*) FROM orders WHERE delivered_at IS NOT NULL AND delivered_at > promised_at",
     ),
     (
         "select alias in ORDER BY",
@@ -108,9 +113,7 @@ class TestAttacks:
 
 
 class TestNoFalsePositives:
-    @pytest.mark.parametrize(
-        ("label", "sql"), LEGITIMATE, ids=[label for label, _ in LEGITIMATE]
-    )
+    @pytest.mark.parametrize(("label", "sql"), LEGITIMATE, ids=[label for label, _ in LEGITIMATE])
     def test_legitimate_query_passes(self, label: str, sql: str, catalog: Catalog) -> None:
         report = validate(sql, catalog)
         assert report.ok, f"false positive on {label}: {report.rules_fired}"
@@ -153,11 +156,8 @@ class TestLimitHandling:
 
 class TestComplexity:
     def test_too_many_joins(self, catalog: Catalog) -> None:
-        sql = (
-            "SELECT 1 FROM orders o "
-            + " ".join(
-                f"JOIN customers c{i} ON c{i}.customer_id = o.customer_id" for i in range(8)
-            )
+        sql = "SELECT 1 FROM orders o " + " ".join(
+            f"JOIN customers c{i} ON c{i}.customer_id = o.customer_id" for i in range(8)
         )
         assert "too_many_joins" in validate(sql, catalog, GuardrailPolicy(max_joins=3)).rules_fired
 
@@ -224,9 +224,7 @@ class TestRobustness:
         if not report.ok:
             assert report.sql == ""
 
-    def test_recursive_cte_passes_validation_but_executor_bounds_it(
-        self, catalog: Catalog
-    ) -> None:
+    def test_recursive_cte_passes_validation_but_executor_bounds_it(self, catalog: Catalog) -> None:
         """Defence in depth in one test.
 
         An unbounded recursive CTE is structurally valid SQL — no static check can decide
@@ -269,3 +267,53 @@ class TestExtraction:
         assert has_multiple_statements("SELECT 1; DROP TABLE t")
         assert not has_multiple_statements("SELECT 1;")
         assert not has_multiple_statements("SELECT * FROM t WHERE x = 'a;b'")
+
+
+class TestStackedStatementInModelReply:
+    """A second statement in the model's reply must be found, not trimmed away unseen.
+
+    Regression guard: extraction cuts at the first semicolon, and the pipeline used to
+    validate only what was left, so `SELECT 1; DROP TABLE orders` ran as `SELECT 1` and the
+    attack never appeared in any rule count (DECISIONS.md D4).
+    """
+
+    @pytest.mark.parametrize(
+        ("reply", "second"),
+        [
+            ("SELECT 1; DROP TABLE orders", "DROP TABLE orders"),
+            ("SELECT 1;\nDELETE FROM customers;", "DELETE FROM customers"),
+            ("```sql\nSELECT 1;\nDROP TABLE t;\n```", "DROP TABLE t"),
+            (
+                "SELECT 1; /* now */ ATTACH DATABASE '/tmp/e.db' AS e",
+                "ATTACH DATABASE '/tmp/e.db' AS e",
+            ),
+            ("SELECT 1; -- clean up\nDROP TABLE t", "DROP TABLE t"),
+            ("SELECT 1; drop table t; This removes the table.", "drop table t"),
+            ("SELECT 1; SELECT 2", "SELECT 2"),
+        ],
+    )
+    def test_second_statement_is_found(self, reply: str, second: str) -> None:
+        assert find_stacked_statement(reply) == second
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "SELECT 1",
+            "SELECT 1;",
+            "SELECT 1; -- this counts rows",
+            "SELECT COUNT(*) FROM orders; This counts every order.",
+            "SELECT COUNT(*) FROM orders; With this query you get the total.",
+            "SELECT * FROM t WHERE x = 'a;b'",
+            "```sql\nSELECT 1;\n```\nThis query returns one.",
+            "I cannot answer that.",
+        ],
+    )
+    def test_single_statement_or_explanation_is_not_stacked(self, reply: str) -> None:
+        assert find_stacked_statement(reply) is None
+
+    def test_validator_reports_it_from_the_raw_reply(self, catalog: Catalog) -> None:
+        reply = "SELECT COUNT(*) FROM orders; DROP TABLE orders"
+        report = validate(extract_sql(reply), catalog, raw_output=reply)
+        assert not report.ok
+        assert report.rules_fired == ["stacked_statements"]
+        assert report.sql == ""

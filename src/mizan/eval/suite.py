@@ -61,8 +61,7 @@ _PAIRS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "late_orders_total",
         "how many orders were delivered late?",
         "كم عدد الطلبات التي تم تسليمها متأخرة؟",
-        "SELECT COUNT(*) FROM orders "
-        "WHERE delivered_at IS NOT NULL AND delivered_at > promised_at",
+        "SELECT COUNT(*) FROM orders WHERE delivered_at IS NOT NULL AND delivered_at > promised_at",
         "medium",
         ("date_logic", "null_handling"),
     ),

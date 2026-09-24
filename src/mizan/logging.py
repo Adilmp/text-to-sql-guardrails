@@ -34,10 +34,29 @@ _run_id: ContextVar[str | None] = ContextVar("mizan_run_id", default=None)
 # own `extra=` calls and is therefore worth emitting as structured data.
 _STANDARD_RECORD_KEYS = frozenset(
     {
-        "name", "msg", "args", "levelname", "levelno", "pathname", "filename", "module",
-        "exc_info", "exc_text", "stack_info", "lineno", "funcName", "created", "msecs",
-        "relativeCreated", "thread", "threadName", "processName", "process", "taskName",
-        "message", "asctime",
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "taskName",
+        "message",
+        "asctime",
     }
 )
 

@@ -105,6 +105,9 @@ class CaseOutcome:
     error: str | None
     confidence: float
     latency_ms: float
+    #: The model's reply before extraction. Without it, a stacked second statement that
+    #: extraction removed could never be checked after the fact.
+    raw_output: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -123,6 +126,7 @@ class CaseOutcome:
             "error": self.error,
             "confidence": round(self.confidence, 3),
             "latency_ms": round(self.latency_ms, 1),
+            "raw_output": self.raw_output,
         }
 
 

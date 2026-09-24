@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import re
 
+import sqlglot
+
 _FENCE_RE = re.compile(
     r"```[ \t]*(?:sql|sqlite|postgres|postgresql|mysql)?[ \t]*\r?\n(?P<body>.*?)(?:```|\Z)",
     re.DOTALL | re.IGNORECASE,
@@ -52,7 +54,55 @@ def extract_sql(raw: str) -> str:
 
     Returns an empty string when nothing statement-like is present; the caller reports that
     as a parse failure rather than guessing.
+
+    Only the *first* statement is returned. A second one is not silently discarded, though:
+    :func:`find_stacked_statement` recovers it, and the validator reports it (decision D4).
     """
+    text = _locate_statement(raw)
+    if not text:
+        return ""
+
+    # 3. Cut at the first semicolon. Everything after it is either explanation or a stacked
+    #    statement; both are the caller's problem to report, not ours to silently execute.
+    #    `find_stacked_statement` looks at what was cut, so a stacked query is *reported*,
+    #    never quietly trimmed away here.
+    text = _strip_trailing_prose(text)
+
+    return text.strip().rstrip(";").strip()
+
+
+def find_stacked_statement(raw: str) -> str | None:
+    """The second SQL statement in a model reply, or ``None`` if there is only one.
+
+    :func:`extract_sql` keeps the first statement and cuts at its semicolon. Without this
+    check, a reply of ``SELECT 1; DROP TABLE orders`` would be reduced to ``SELECT 1``: the
+    ``DROP`` never runs, but it also vanishes from the telemetry, so an attack is recorded as
+    a clean answer.
+
+    What follows the first statement counts as a statement when it starts with a statement
+    keyword *and* sqlglot can parse it (the whole remainder up to its own semicolon, or just
+    its first line). Explanations such as ``This query counts the orders.`` fail that test.
+    An imperative sentence that happens to parse, such as ``Drop the LIMIT to see all rows``,
+    is reported too: like the function allowlist, this fails closed, and a false alarm shows
+    up in the eval rather than a missed attack showing up nowhere.
+    """
+    text = _locate_statement(raw)
+    if not text:
+        return None
+    first = _strip_trailing_prose(text)
+    tail = _skip_separators_and_comments(text[len(first) :])
+    if not tail or not _LEADING_STATEMENT_RE.match(tail):
+        return None
+    second = _strip_trailing_prose(tail).strip()
+    first_line = second.splitlines()[0].strip() if second else ""
+    for candidate in (second, first_line):
+        if candidate and _parses(candidate):
+            return second
+    return None
+
+
+def _locate_statement(raw: str) -> str:
+    """The model's reply from the first statement keyword onwards, or ``""``."""
     if not raw or not raw.strip():
         return ""
 
@@ -75,14 +125,29 @@ def extract_sql(raw: str) -> str:
             text = text[start.start() :]
         else:
             return ""
+    return text
 
-    # 3. Cut at the first semicolon. Everything after it is either explanation or a stacked
-    #    statement; both are the caller's problem to report, not ours to silently execute.
-    #    The statement-count check in the validator still sees the original text, so a
-    #    stacked query is *reported*, never quietly trimmed away here.
-    text = _strip_trailing_prose(text)
 
-    return text.strip().rstrip(";").strip()
+def _skip_separators_and_comments(text: str) -> str:
+    """Drop leading semicolons, whitespace and SQL comments."""
+    while True:
+        text = text.lstrip(" \t\r\n;")
+        if text.startswith("--"):
+            newline = text.find("\n")
+            text = "" if newline == -1 else text[newline + 1 :]
+        elif text.startswith("/*"):
+            end = text.find("*/")
+            text = "" if end == -1 else text[end + 2 :]
+        else:
+            return text
+
+
+def _parses(sql: str) -> bool:
+    """Whether sqlglot can parse ``sql`` as SQLite. Used only to recognise a statement."""
+    try:
+        return sqlglot.parse_one(sql, dialect="sqlite") is not None
+    except Exception:  # sqlglot raises several unrelated error types
+        return False
 
 
 def _strip_trailing_prose(text: str) -> str:

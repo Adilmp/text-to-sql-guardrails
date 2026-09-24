@@ -31,6 +31,12 @@ from mizan.guardrails.executor import _MAX_CELL_CHARS
 from mizan.nl import Script
 from mizan.schema import Catalog
 
+#: Whether this interpreter can set SQLite's engine-level string limit (Python 3.11+). The
+#: executor applies it when available, which changes *how* an oversized value is stopped.
+_ENGINE_LENGTH_LIMIT = hasattr(sqlite3, "SQLITE_LIMIT_LENGTH") and hasattr(
+    sqlite3.Connection, "setlimit"
+)
+
 
 class TestSchemaExfiltration:
     """The catalog is the allowlist of readable tables. Anything outside it is not readable."""
@@ -48,9 +54,7 @@ class TestSchemaExfiltration:
             ("cte to master", "WITH m AS (SELECT name FROM sqlite_master) SELECT * FROM m"),
         ],
     )
-    def test_internal_tables_are_not_readable(
-        self, label: str, sql: str, catalog: Catalog
-    ) -> None:
+    def test_internal_tables_are_not_readable(self, label: str, sql: str, catalog: Catalog) -> None:
         report = validate(sql, catalog)
         assert not report.ok, f"{label} leaked the schema"
         assert "unknown_table" in report.rules_fired
@@ -88,10 +92,25 @@ class TestResourceExhaustion:
         result = execute(
             "SELECT printf('%.*c', 50000000, 'x') AS s", db_path, max_rows=10, timeout_s=10.0
         )
-        cell = str(result.rows[0][0])
-        assert len(cell) < _MAX_CELL_CHARS + 200
-        assert result.cells_truncated == 1
-        assert "truncated" in cell
+        cell = result.rows[0][0]
+        if _ENGINE_LENGTH_LIMIT:
+            # Python 3.11+: SQLite's own length limit refuses to build the 50 MB string at
+            # all (its printf returns NULL), so nothing large is ever allocated.
+            assert cell is None
+        else:
+            # Python 3.10: the string is built, and the executor's cell cap bounds what
+            # comes out.
+            assert len(str(cell)) < _MAX_CELL_CHARS + 200
+            assert result.cells_truncated == 1
+            assert "truncated" in str(cell)
+
+    @pytest.mark.skipif(not _ENGINE_LENGTH_LIMIT, reason="Connection.setlimit is Python 3.11+")
+    def test_engine_refuses_oversized_values(self, db_path: Path) -> None:
+        """Where the engine-level limit exists, a 10 MB value is refused outright."""
+        from mizan.errors import ExecutionError
+
+        with pytest.raises(ExecutionError, match="too big"):
+            execute("SELECT hex(zeroblob(5000000)) AS s", db_path, timeout_s=10.0)
 
     def test_blob_hex_amplification_is_bounded(self, db_path: Path) -> None:
         """A different primitive reaching the same outcome — which is why the fix bounds
@@ -145,9 +164,7 @@ class TestStoredPromptInjection:
         db = tmp_path / "evil.sqlite"
         conn = sqlite3.connect(db)
         conn.executescript("CREATE TABLE t (id INTEGER PRIMARY KEY, status TEXT);")
-        conn.executemany(
-            "INSERT INTO t VALUES (?,?)", [(i, v) for i, v in enumerate(values, 1)]
-        )
+        conn.executemany("INSERT INTO t VALUES (?,?)", [(i, v) for i, v in enumerate(values, 1)])
         conn.commit()
         conn.close()
         return Catalog.from_sqlite(db)

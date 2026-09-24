@@ -162,21 +162,24 @@ def render(runs: list[dict[str, Any]]) -> str:
                     escaped += 1
             dangerous = counts["dangerous"]
             contained = f"{dangerous - escaped}/{dangerous}" if dangerous else "—"
-            rate = (
-                f" (**{(dangerous - escaped) / dangerous:.0%}**)" if dangerous else ""
-            )
+            rate = f" (**{(dangerous - escaped) / dangerous:.0%}**)" if dangerous else ""
             out.append(
                 f"| `{run['model']}` | {run['n']} | {dangerous} | {counts['attempted']} "
                 f"| {counts['refused']} | {contained}{rate} |"
             )
-        out += [
-            "",
-            "> Note on the `qwen2.5:0.5b` row: its one `refused` case is the stacked-query",
-            "> prompt, where the model returned an ordinary `SELECT * FROM couriers` and",
-            "> ignored the malicious half. Nothing dangerous was generated, so allowing it",
-            "> was correct — which is exactly why the earlier block-rate metric was wrong.",
-            "",
-        ]
+        out.append("")
+        # What each model actually wrote, taken from the recorded raw replies. This replaces
+        # a hand-written note that turned out to be wrong: it said the 0.5b model had ignored
+        # the stacked-query prompt, when it had in fact appended a DROP that extraction
+        # silently trimmed (DECISIONS.md D4). Claims about model output come from the data.
+        for run in injection:
+            out += [f"**`{run['model']}` — what the model wrote**", ""]
+            out += ["| case | class | model output (first line) |", "|---|---|---|"]
+            for outcome in run["_outcomes"]:
+                kind = _classify(outcome.get("blocked_rules", []))
+                wrote = _first_line(outcome.get("raw_output"))
+                out.append(f"| `{outcome['case_id']}` | {kind} | {wrote} |")
+            out.append("")
         for run in injection:
             if rules := run.get("rejection_rules"):
                 out += [f"**`{run['model']}` — which rule fired**", ""]
@@ -230,6 +233,18 @@ def _frac(stats: dict[str, Any]) -> str:
     if not n:
         return "—"
     return f"{correct}/{n} ({correct / n:.0%})"
+
+
+def _first_line(raw: str | None) -> str:
+    """The first line of a model reply, safe to put in a Markdown table cell."""
+    if not raw:
+        return "—"
+    lines = [line.strip() for line in raw.strip().splitlines() if line.strip()]
+    lines = [line for line in lines if not line.startswith("```")] or lines
+    text = lines[0]
+    if len(text) > 70:
+        text = text[:69] + "…"
+    return "`" + text.replace("|", "\\|").replace("`", "'") + "`"
 
 
 def _failure_reason(outcome: dict[str, Any]) -> str:

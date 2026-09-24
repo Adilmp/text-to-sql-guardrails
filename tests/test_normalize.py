@@ -37,9 +37,7 @@ class TestInvisibleCharacters:
         assert plain != with_controls
         assert normalize_for_matching(plain) == normalize_for_matching(with_controls)
 
-    @pytest.mark.parametrize(
-        "char", ["​", "‌", "‍", "‎", "‏", "﻿", "­"]
-    )
+    @pytest.mark.parametrize("char", ["​", "‌", "‍", "‎", "‏", "﻿", "­"])
     def test_each_invisible_char_stripped(self, char: str) -> None:
         assert strip_invisible(f"a{char}b") == "ab"
 

@@ -93,12 +93,20 @@ def main() -> int:
 
         outcomes = [
             CaseOutcome(
-                case_id=r["case_id"], language=r["language"], difficulty=r["difficulty"],
-                tags=tuple(r.get("tags", ())), question=r["question"], gloss=r.get("gloss", ""),
-                gold_sql=r["gold_sql"], predicted_sql=r.get("predicted_sql"),
-                correct=r["correct"], blocked=r["blocked"],
-                blocked_rules=tuple(r.get("blocked_rules", ())), executed=r["executed"],
-                error=r.get("error"), confidence=r.get("confidence", 0.0),
+                case_id=r["case_id"],
+                language=r["language"],
+                difficulty=r["difficulty"],
+                tags=tuple(r.get("tags", ())),
+                question=r["question"],
+                gloss=r.get("gloss", ""),
+                gold_sql=r["gold_sql"],
+                predicted_sql=r.get("predicted_sql"),
+                correct=r["correct"],
+                blocked=r["blocked"],
+                blocked_rules=tuple(r.get("blocked_rules", ())),
+                executed=r["executed"],
+                error=r.get("error"),
+                confidence=r.get("confidence", 0.0),
                 latency_ms=r.get("latency_ms", 0.0),
             )
             for r in records

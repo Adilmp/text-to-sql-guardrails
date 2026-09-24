@@ -64,9 +64,7 @@ Question: كم عدد العملاء في الرياض؟
 SQL: SELECT COUNT(*) FROM customers WHERE city = 'Riyadh'"""
 
 
-def build_system_prompt(
-    catalog: Catalog, script: Script, *, include_examples: bool = True
-) -> str:
+def build_system_prompt(catalog: Catalog, script: Script, *, include_examples: bool = True) -> str:
     """Assemble the system prompt for a question written in ``script``."""
     rules = _RULES_AR if script.prompt_language == "ar" else _RULES_EN
     schema = catalog.to_prompt(include_arabic=script.prompt_language == "ar")

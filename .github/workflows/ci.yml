@@ -5,9 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# The workflow only reads the repository.
+permissions:
+  contents: read
+
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest, so the runner image doesn't change under the build.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -17,52 +22,60 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
 
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
-
+      # A project virtualenv with the exact versions in uv.lock. (Installing into the
+      # runner's system Python is refused: Ubuntu marks it externally managed.) `--locked`
+      # also fails the build if uv.lock is out of date with pyproject.toml.
       - name: Install
-        run: uv pip install --system -e ".[dev]"
+        run: uv sync --locked --extra dev --python ${{ matrix.python-version }}
 
       - name: Lint
-        run: ruff check src tests scripts
+        run: uv run --no-sync ruff check src tests scripts
 
       - name: Format check
-        run: ruff format --check src tests scripts
-        continue-on-error: true
+        run: uv run --no-sync ruff format --check src tests scripts
 
       - name: Type check
-        run: mypy src
+        run: uv run --no-sync mypy src
 
       - name: Tests
-        run: pytest -q -m "not live"
+        run: uv run --no-sync pytest -q -m "not live"
 
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
 
       - name: Install
-        run: uv pip install --system -e ".[dev]" pip-audit
+        run: uv sync --locked --extra dev --python 3.12
 
       # SAST. `S` is flake8-bandit, enabled in pyproject so it also runs on every local
-      # lint - a security check nobody remembers to invoke is not a control.
+      # lint - a security check nobody remembers to invoke is not a control. `--select` on
+      # the command line replaces pyproject's rule set, so its documented S311 exception
+      # (seeded test data and retry jitter are not cryptography) is repeated here.
       - name: SAST (bandit rules)
-        run: ruff check --select S src scripts
+        run: uv run --no-sync ruff check --select S --ignore S311 src scripts
 
+      # Audits exactly what uv.lock pins, with hashes, for every Python version it covers.
       - name: Dependency vulnerability audit
-        run: pip-audit --strict --progress-spinner off
+        run: |
+          uv export --locked --extra dev --no-emit-project --format requirements-txt \
+            -o "$RUNNER_TEMP/requirements.txt"
+          uvx pip-audit@2.10.1 --strict --disable-pip --progress-spinner off \
+            -r "$RUNNER_TEMP/requirements.txt"
 
       # Run the adversarial suite on its own so a failure here is unmistakable in the log
       # rather than buried among 200 passing tests.
       - name: Security test suite
-        run: pytest tests/test_security.py -v
+        run: uv run --no-sync pytest tests/test_security.py -v

@@ -68,9 +68,7 @@ class AnthropicProvider(Provider):
             # forever, so it is raised as a non-retryable ProviderResponseError.
             status = getattr(exc, "status_code", 0)
             if status == 429 or status >= 500:
-                raise ProviderUnavailable(
-                    f"anthropic returned {status}", status=status
-                ) from exc
+                raise ProviderUnavailable(f"anthropic returned {status}", status=status) from exc
             raise ProviderResponseError(
                 f"anthropic returned {status}", status=status, body=str(exc)[:300]
             ) from exc

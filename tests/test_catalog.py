@@ -16,7 +16,12 @@ from mizan.schema import Catalog
 class TestIntrospection:
     def test_all_tables_found(self, catalog: Catalog) -> None:
         assert catalog.all_table_names == {
-            "customers", "orders", "order_items", "products", "warehouses", "couriers",
+            "customers",
+            "orders",
+            "order_items",
+            "products",
+            "warehouses",
+            "couriers",
         }
 
     def test_foreign_keys(self, catalog: Catalog) -> None:
@@ -38,7 +43,11 @@ class TestSampleValues:
         status = catalog.table("orders").column("status")
         assert status is not None
         assert set(status.sample_values) == {
-            "pending", "in_transit", "delivered", "returned", "cancelled",
+            "pending",
+            "in_transit",
+            "delivered",
+            "returned",
+            "cancelled",
         }
 
     def test_high_cardinality_column_gets_no_samples(self, catalog: Catalog) -> None:

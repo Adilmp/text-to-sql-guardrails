@@ -141,9 +141,7 @@ def download(data_dir: Path, *, timeout_s: float = 600.0) -> SpiderDataset:
     for url in SPIDER_MIRRORS:
         try:
             logger.info("downloading spider", extra={"url": url})
-            with httpx.stream(
-                "GET", url, timeout=timeout_s, follow_redirects=True
-            ) as response:
+            with httpx.stream("GET", url, timeout=timeout_s, follow_redirects=True) as response:
                 response.raise_for_status()
                 with archive.open("wb") as handle:
                     for chunk in response.iter_bytes(chunk_size=1 << 20):

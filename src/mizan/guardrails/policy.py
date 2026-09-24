@@ -25,29 +25,90 @@ ALLOWED_FUNCTIONS: frozenset[str] = frozenset(
     | {"coalesce", "ifnull", "iif", "nullif", "case"}
     # string
     | {
-        "char", "concat", "concat_ws", "format", "hex", "instr", "length", "lower",
-        "ltrim", "printf", "quote", "replace", "rtrim", "substr", "substring", "trim",
-        "unicode", "upper",
+        "char",
+        "concat",
+        "concat_ws",
+        "format",
+        "hex",
+        "instr",
+        "length",
+        "lower",
+        "ltrim",
+        "printf",
+        "quote",
+        "replace",
+        "rtrim",
+        "substr",
+        "substring",
+        "trim",
+        "unicode",
+        "upper",
     }
     # numeric
     | {
-        "abs", "acos", "asin", "atan", "atan2", "ceil", "ceiling", "cos", "degrees",
-        "exp", "floor", "ln", "log", "log10", "log2", "mod", "pi", "pow", "power",
-        "radians", "round", "sign", "sin", "sqrt", "tan", "trunc",
+        "abs",
+        "acos",
+        "asin",
+        "atan",
+        "atan2",
+        "ceil",
+        "ceiling",
+        "cos",
+        "degrees",
+        "exp",
+        "floor",
+        "ln",
+        "log",
+        "log10",
+        "log2",
+        "mod",
+        "pi",
+        "pow",
+        "power",
+        "radians",
+        "round",
+        "sign",
+        "sin",
+        "sqrt",
+        "tan",
+        "trunc",
     }
     # date / time
     | {
-        "date", "datetime", "julianday", "strftime", "time", "timediff", "unixepoch",
+        "date",
+        "datetime",
+        "julianday",
+        "strftime",
+        "time",
+        "timediff",
+        "unixepoch",
     }
     # window
     | {
-        "cume_dist", "dense_rank", "first_value", "lag", "last_value", "lead",
-        "nth_value", "ntile", "percent_rank", "rank", "row_number",
+        "cume_dist",
+        "dense_rank",
+        "first_value",
+        "lag",
+        "last_value",
+        "lead",
+        "nth_value",
+        "ntile",
+        "percent_rank",
+        "rank",
+        "row_number",
     }
     # json (read-only accessors only)
     | {
-        "json", "json_array", "json_array_length", "json_extract", "json_group_array",
-        "json_group_object", "json_object", "json_quote", "json_type", "json_valid",
+        "json",
+        "json_array",
+        "json_array_length",
+        "json_extract",
+        "json_group_array",
+        "json_group_object",
+        "json_object",
+        "json_quote",
+        "json_type",
+        "json_valid",
     }
     # type inspection / casting
     | {"cast", "typeof"}
@@ -64,10 +125,19 @@ ALLOWED_FUNCTIONS: frozenset[str] = frozenset(
 #:   fingerprinting the target before a real attack.
 DENIED_FUNCTIONS: frozenset[str] = frozenset(
     {
-        "load_extension", "readfile", "writefile", "edit", "fts3_tokenizer",
-        "zeroblob", "randomblob", "sqlite_compileoption_get",
-        "sqlite_compileoption_used", "sqlite_source_id", "last_insert_rowid",
-        "changes", "total_changes",
+        "load_extension",
+        "readfile",
+        "writefile",
+        "edit",
+        "fts3_tokenizer",
+        "zeroblob",
+        "randomblob",
+        "sqlite_compileoption_get",
+        "sqlite_compileoption_used",
+        "sqlite_source_id",
+        "last_insert_rowid",
+        "changes",
+        "total_changes",
     }
 )
 

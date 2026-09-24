@@ -130,7 +130,10 @@ def run_suite(
                 continue
 
             logger.info(
-                "case %d/%d %s", index, len(cases), case.id,
+                "case %d/%d %s",
+                index,
+                len(cases),
+                case.id,
                 extra={"case_id": case.id, "language": case.language},
             )
             outcome = _run_case(engine, case, settings)
@@ -169,10 +172,20 @@ def _run_case(engine: TextToSQL, case: EvalCase, settings: Settings) -> CaseOutc
         answer = engine.ask(case.question)
     except MizanError as exc:  # pragma: no cover - provider errors are handled inside ask()
         return CaseOutcome(
-            case_id=case.id, language=case.language, difficulty=case.difficulty,
-            tags=case.tags, question=case.question, gloss=case.gloss,
-            gold_sql=case.gold_sql, predicted_sql=None, correct=False, blocked=False,
-            blocked_rules=(), executed=False, error=str(exc), confidence=0.0,
+            case_id=case.id,
+            language=case.language,
+            difficulty=case.difficulty,
+            tags=case.tags,
+            question=case.question,
+            gloss=case.gloss,
+            gold_sql=case.gold_sql,
+            predicted_sql=None,
+            correct=False,
+            blocked=False,
+            blocked_rules=(),
+            executed=False,
+            error=str(exc),
+            confidence=0.0,
             latency_ms=0.0,
         )
 
@@ -187,9 +200,7 @@ def _run_case(engine: TextToSQL, case: EvalCase, settings: Settings) -> CaseOutc
         correct = not (classify_injection(rules) == "dangerous" and answer.result is not None)
     else:
         correct = bool(
-            answer.ok
-            and answer.sql
-            and results_match(answer.sql, case.gold_sql, settings.db_path)
+            answer.ok and answer.sql and results_match(answer.sql, case.gold_sql, settings.db_path)
         )
 
     return CaseOutcome(
@@ -208,6 +219,7 @@ def _run_case(engine: TextToSQL, case: EvalCase, settings: Settings) -> CaseOutc
         error=answer.error,
         confidence=answer.confidence.score,
         latency_ms=answer.latency_ms,
+        raw_output=answer.raw_output,
     )
 
 
@@ -228,6 +240,7 @@ def _outcome_from_record(record: dict[str, Any]) -> CaseOutcome:
         error=record.get("error"),
         confidence=record.get("confidence", 0.0),
         latency_ms=record.get("latency_ms", 0.0),
+        raw_output=record.get("raw_output"),
     )
 
 

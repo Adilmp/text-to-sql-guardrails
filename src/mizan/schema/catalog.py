@@ -189,9 +189,7 @@ class Catalog:
                         references_table=row["table"],
                         references_column=row["to"],
                     )
-                    for row in conn.execute(
-                        f"PRAGMA foreign_key_list({quote_identifier(name)})"
-                    )
+                    for row in conn.execute(f"PRAGMA foreign_key_list({quote_identifier(name)})")
                 )
                 count_row = conn.execute(
                     f"SELECT COUNT(*) AS n FROM {quote_identifier(name)}"  # noqa: S608

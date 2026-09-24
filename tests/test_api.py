@@ -63,6 +63,4 @@ class TestAsk:
         assert client.post("/api/ask", json={"question": "x" * 5000}).status_code == 422
 
     def test_samples_out_of_range_rejected(self, client: TestClient) -> None:
-        assert (
-            client.post("/api/ask", json={"question": "hi", "samples": 99}).status_code == 422
-        )
+        assert client.post("/api/ask", json={"question": "hi", "samples": 99}).status_code == 422

@@ -40,7 +40,7 @@ from ..errors import SQLParseError
 from ..logging import get_logger
 from ..nl.normalize import normalize_for_matching
 from ..schema.catalog import Catalog
-from .extract import has_multiple_statements
+from .extract import find_stacked_statement, has_multiple_statements
 from .policy import GuardrailPolicy
 
 logger = get_logger("guardrails")
@@ -49,7 +49,12 @@ DIALECT = "sqlite"
 
 #: Any of these appearing anywhere in the tree means the statement mutates state.
 _WRITE_NODES: tuple[type[exp.Expression], ...] = (
-    exp.Insert, exp.Update, exp.Delete, exp.Drop, exp.Create, exp.Alter,
+    exp.Insert,
+    exp.Update,
+    exp.Delete,
+    exp.Drop,
+    exp.Create,
+    exp.Alter,
     exp.TruncateTable,
 )
 
@@ -74,8 +79,18 @@ def _optional_nodes(*names: str) -> tuple[type[exp.Expression], ...]:
 #: reach outside the current database file. ``ATTACH`` is the important one — it opens a
 #: second database file, which is a full sandbox escape on SQLite.
 _DANGEROUS_NODES: tuple[type[exp.Expression], ...] = _optional_nodes(
-    "Attach", "Detach", "Pragma", "Vacuum", "Analyze", "Transaction", "Commit",
-    "Rollback", "Set", "Use", "Grant", "Revoke",
+    "Attach",
+    "Detach",
+    "Pragma",
+    "Vacuum",
+    "Analyze",
+    "Transaction",
+    "Commit",
+    "Rollback",
+    "Set",
+    "Use",
+    "Grant",
+    "Revoke",
 )
 
 
@@ -148,8 +163,13 @@ def validate(
     sql: str,
     catalog: Catalog | None = None,
     policy: GuardrailPolicy | None = None,
+    *,
+    raw_output: str | None = None,
 ) -> GuardrailReport:
     """Validate ``sql`` against ``policy`` and (optionally) a real schema ``catalog``.
+
+    ``raw_output`` is the model's whole reply, when ``sql`` was extracted from one. It is
+    checked for a second statement that extraction cut off (decision D4).
 
     Returns a report rather than raising, so the eval harness can count *which* rule fired
     on every rejected query instead of seeing a single opaque failure.
@@ -171,8 +191,16 @@ def validate(
     # Checked on the raw text, before extraction trims anything: a stacked query must be
     # reported as an attack, not silently reduced to its harmless first statement.
     if has_multiple_statements(sql):
+        violations.append(Violation("stacked_statements", "multiple statements in one request"))
+    # `sql` usually arrives already extracted, cut at its first semicolon. The model's reply
+    # is checked as well, so a second statement is reported as an attack instead of
+    # disappearing with the text extraction discarded.
+    elif raw_output is not None and (second := find_stacked_statement(raw_output)):
         violations.append(
-            Violation("stacked_statements", "multiple statements in one request")
+            Violation(
+                "stacked_statements",
+                f"the model returned a second statement: {second[:80]!r}",
+            )
         )
 
     try:
@@ -280,7 +308,7 @@ def _check_statement_kind(tree: exp.Expression, policy: GuardrailPolicy) -> list
                 "not_a_select",
                 f"top-level statement is {type(root).__name__}, expected SELECT",
             )
-            )
+        )
     return out
 
 
@@ -439,9 +467,7 @@ def _alias_map(tree: exp.Expression) -> dict[str, str]:
     return mapping
 
 
-def _check_schema(
-    tree: exp.Expression, catalog: Catalog
-) -> tuple[list[Violation], list[str]]:
+def _check_schema(tree: exp.Expression, catalog: Catalog) -> tuple[list[Violation], list[str]]:
     """Verify every identifier exists. This *is* the hallucination detector.
 
     Deterministic, free, and strictly more reliable than asking a second model whether the
@@ -472,9 +498,7 @@ def _check_schema(
         if name in cte_names:
             continue
         if not catalog.has_table(name):
-            violations.append(
-                Violation("unknown_table", f"table {table.name!r} does not exist")
-            )
+            violations.append(Violation("unknown_table", f"table {table.name!r} does not exist"))
         else:
             referenced_real_tables.add(name)
 

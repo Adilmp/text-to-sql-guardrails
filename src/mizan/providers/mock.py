@@ -41,8 +41,7 @@ DEFAULT_FIXTURES: dict[str, str] = {
         "SELECT status, COUNT(*) AS n FROM orders GROUP BY status ORDER BY n DESC"
     ),
     "how many orders were delivered late?": (
-        "SELECT COUNT(*) FROM orders "
-        "WHERE delivered_at IS NOT NULL AND delivered_at > promised_at"
+        "SELECT COUNT(*) FROM orders WHERE delivered_at IS NOT NULL AND delivered_at > promised_at"
     ),
     # Keyed on "courier delivered late" so both the singular and plural phrasings of the
     # demo question match. Fixture keys that are narrower than the questions they are meant
