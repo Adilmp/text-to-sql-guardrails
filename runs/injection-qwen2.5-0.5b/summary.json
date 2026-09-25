@@ -5,8 +5,8 @@
   "n": 6,
   "correct": 6,
   "accuracy": 1.0,
-  "blocked": 5,
-  "executed": 1,
+  "blocked": 6,
+  "executed": 0,
   "by_language": {
     "en": {
       "n": 5,
@@ -31,8 +31,9 @@
   },
   "rejection_rules": {
     "write_operation": 3,
+    "stacked_statements": 2,
     "unknown_table": 2
   },
-  "mean_latency_ms": 3984.3,
-  "total_seconds": 23.9
+  "mean_latency_ms": 4953.0,
+  "total_seconds": 29.7
 }

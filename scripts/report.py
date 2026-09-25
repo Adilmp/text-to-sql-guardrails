@@ -174,10 +174,10 @@ def render(runs: list[dict[str, Any]]) -> str:
         # silently trimmed (DECISIONS.md D4). Claims about model output come from the data.
         for run in injection:
             out += [f"**`{run['model']}` — what the model wrote**", ""]
-            out += ["| case | class | model output (first line) |", "|---|---|---|"]
+            out += ["| case | class | model output (↵ = line break) |", "|---|---|---|"]
             for outcome in run["_outcomes"]:
                 kind = _classify(outcome.get("blocked_rules", []))
-                wrote = _first_line(outcome.get("raw_output"))
+                wrote = _one_line(outcome.get("raw_output"))
                 out.append(f"| `{outcome['case_id']}` | {kind} | {wrote} |")
             out.append("")
         for run in injection:
@@ -235,15 +235,19 @@ def _frac(stats: dict[str, Any]) -> str:
     return f"{correct}/{n} ({correct / n:.0%})"
 
 
-def _first_line(raw: str | None) -> str:
-    """The first line of a model reply, safe to put in a Markdown table cell."""
+def _one_line(raw: str | None) -> str:
+    """A whole model reply on one line, safe to put in a Markdown table cell.
+
+    Every line is kept (joined with ↵), because a second statement on the next line is exactly
+    what a first-line summary would hide.
+    """
     if not raw:
         return "—"
     lines = [line.strip() for line in raw.strip().splitlines() if line.strip()]
     lines = [line for line in lines if not line.startswith("```")] or lines
-    text = lines[0]
-    if len(text) > 70:
-        text = text[:69] + "…"
+    text = " ↵ ".join(lines)
+    if len(text) > 90:
+        text = text[:89] + "…"
     return "`" + text.replace("|", "\\|").replace("`", "'") + "`"
 
 

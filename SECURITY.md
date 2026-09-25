@@ -44,7 +44,7 @@ first.
 | HTTP | CSP `default-src 'none'` + `connect-src 'self'` | Exfiltration if client escaping ever fails |
 | HTTP | `frame-ancestors 'none'`, `X-Frame-Options: DENY` | Clickjacking a localhost-bound tool |
 | HTTP | No CORS middleware + JSON-only bodies | Cross-origin reads; stands in for CSRF |
-| Supply chain | `uv.lock` (56 pinned packages), `pip-audit` in CI | Unreviewed dependency drift |
+| Supply chain | `uv.lock` (56 pinned packages) installed exactly in CI; `pip-audit` on the hashed lockfile | Unreviewed dependency drift |
 | CI | `ruff --select S` (flake8-bandit) on every lint | Regressions in the above |
 
 The runtime controls are asserted by tests that **do not involve the validator at all**
@@ -55,8 +55,9 @@ deleted, writes would still fail.
 
 ## 2. What testing found
 
-Three real vulnerabilities. Two were found by probing, one by static analysis plus an
-adversarial test that caught what the scanner missed. None were found by reading the code.
+Three real vulnerabilities, plus one telemetry failure (§2.4). Two vulnerabilities were found
+by probing, one by static analysis plus an adversarial test that caught what the scanner
+missed.
 
 ### 2.1 Memory amplification — every limit bounded the wrong dimension
 
@@ -133,6 +134,24 @@ built a real database with a hostile table name and watched introspection fail.
 
 Scanners and adversarial tests find *different* bugs. Neither alone was sufficient here.
 
+### 2.4 A stacked statement that vanished from the telemetry
+
+Not a way into the database, but a failure of the part that reports attacks. Extraction keeps
+the first statement of the model's reply and cuts at the semicolon, and the pipeline validated
+only that. `SELECT * FROM couriers; DROP TABLE couriers` therefore ran as the SELECT, and the
+`DROP` appeared in no log and no rule count. The database was never at risk: the `DROP` was never
+executed, and the connection is read-only. But the adversarial results said the 0.5b model had
+*refused* the attack.
+
+**Fix.** The validator also checks the model's whole reply for a second statement
+(`extract.find_stacked_statement`: text after the first statement that starts with a statement
+keyword and parses as SQL). Explanations after the semicolon still pass. Eval records now keep
+the model's raw reply, and the runs were measured again.
+
+**How it was found:** reviewing the documentation's claims against the code. The validator's
+own tests passed, because they called it with raw text; the gap was in how the pipeline called
+it. A test now covers the pipeline end to end.
+
 ---
 
 ## 3. Confirmed not exploitable
@@ -168,11 +187,6 @@ Tested and blocked. Tests pin each so a refactor cannot quietly regress them.
    is a single self-contained file. `connect-src 'self'` still stops injected script from
    reaching another host; moving the script and styles into separate files would allow dropping
    `'unsafe-inline'`.
-8. **Stacked statements in model output are trimmed, not reported.** The extractor cuts at the
-   first semicolon, so in `SELECT 1; DROP TABLE t` only `SELECT 1` reaches the validator. The
-   second statement never executes (and the connection is read-only regardless), but the
-   pipeline does not record it as an attack. The validator itself does flag stacked
-   statements when given the raw text. See `DECISIONS.md` D4.
 
 ---
 
@@ -182,9 +196,9 @@ Tested and blocked. Tests pin each so a refactor cannot quietly regress them.
 uv run pytest tests/test_security.py -v
 ```
 
-52 tests across schema exfiltration, resource exhaustion, stored prompt injection,
-driver-level write protection, obfuscation, identifier quoting, API input bounds and security
-headers.
+53 tests (one needs Python 3.11+) across schema exfiltration, resource exhaustion, stored
+prompt injection, driver-level write protection, obfuscation, identifier quoting, API input
+bounds and security headers.
 
 ---
 

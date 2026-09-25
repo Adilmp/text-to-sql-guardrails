@@ -1,5 +1,6 @@
 # Text-to-SQL Guardrails
 
+[![CI](https://github.com/Adilmp/text-to-sql-guardrails/actions/workflows/ci.yml/badge.svg)](https://github.com/Adilmp/text-to-sql-guardrails/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-read--only-003B57?logo=sqlite&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-demo-009688?logo=fastapi&logoColor=white)
@@ -14,10 +15,10 @@ that explains its weakest point.
 |---|---|
 | Execution accuracy | **79.2%** (19/24) with `qwen2.5:7b` on a local CPU; paired Arabic/English suite |
 | Arabic vs English | 83% vs 75% at 7b: no measurable gap (n=12 each) |
-| Harmful statements executed | **0** across 12 adversarial prompts on two models |
+| Harmful statements executed | **0**: all 12 answers to adversarial prompts blocked, across two models |
 | Invented tables and columns | caught before execution (4 cases for 0.5b, 1 for 7b) |
 | Security testing | 3 real vulnerabilities found by testing; fixes and limits in [SECURITY.md](SECURITY.md) |
-| Tests | 218, all offline in ~5 s (52 of them security tests) |
+| Tests | 239, all offline in ~5 s, run in CI on Python 3.10–3.12 (53 of them security tests) |
 
 ## The problem
 
@@ -61,8 +62,8 @@ in `runs/` by `scripts/report.py`, including what was *not* measured.
 
 | Model | Overall | English | Arabic | Time per question |
 |---|---:|---:|---:|---:|
-| `qwen2.5:7b` | **79.2%** (19/24) | 75% (9/12) | 83% (10/12) | 88 s |
-| `qwen2.5:0.5b` | **45.8%** (11/24) | 58% (7/12) | 33% (4/12) | 9 s |
+| `qwen2.5:7b` | **79.2%** (19/24) | 75% (9/12) | 83% (10/12) | 109 s |
+| `qwen2.5:0.5b` | **45.8%** (11/24) | 58% (7/12) | 33% (4/12) | 13 s |
 
 - **The honest headline is the difficulty cliff.** At 7b: easy 92%, medium 88%, **hard 25%**. Four
   of the five failures involve multi-table joins (join-tagged cases: 2 of 6). The fifth returned
@@ -74,15 +75,14 @@ in `runs/` by `scripts/report.py`, including what was *not* measured.
 - **The guardrails are what make a cheap model safe.** The 0.5b model invented identifiers in 4
   cases (7b: 1) and attempted writes just as readily. Nothing harmful executed:
 
-  | Model | Adversarial prompts | Blocked | Of which writes | Harmful statements executed |
+  | Model | Adversarial prompts | Blocked | Dangerous (writes, stacked statements) | Harmful statements executed |
   |---|---:|---:|---:|---:|
   | `qwen2.5:7b` | 6 | 6 | 3 | **0** |
-  | `qwen2.5:0.5b` | 6 | 5 | 3 | **0** |
+  | `qwen2.5:0.5b` | 6 | 6 | 4 | **0** |
 
-  The 0.5b model's sixth answer ran as a plain `SELECT` ([D21](DECISIONS.md)).
-
-  The validation layer doesn't depend on the model, so a weak model that is 10× faster is less
-  accurate, never less safe.
+  The validation layer doesn't depend on the model, so a weak model that is 8× faster is less
+  accurate, never less safe. (An earlier version of this table was wrong: a stacked `DROP` from
+  the 0.5b model was trimmed without being reported. [D4](DECISIONS.md) has the story.)
 - **Confidence carries signal:** mean 0.97 on correct answers vs 0.71 on wrong ones (7b). It
   ranks answers; it is not a calibrated probability ([D17](DECISIONS.md)).
 - **Not measured:** the Spider benchmark (its databases aren't downloadable unattended), the
@@ -144,7 +144,7 @@ MIZAN_PROVIDER=mock uv run mizan ask "drop the orders table"
 | `uv run mizan serve` | Web demo on http://127.0.0.1:8000 (add `MIZAN_PROVIDER=mock` for no model) |
 | `uv run mizan eval --suite both --resume` | Run the evaluation; results land in `runs/` |
 | `uv run mizan health` | Check the database and the model backend |
-| `uv run pytest` | 218 tests, offline, about 5 seconds |
+| `uv run pytest` | 239 tests, offline, about 5 seconds |
 
 Settings come from `MIZAN_*` environment variables (`MIZAN_PROVIDER`, `MIZAN_OLLAMA_MODEL`,
 `MIZAN_MAX_ROWS`, `MIZAN_QUERY_TIMEOUT_S`, …); see `src/mizan/config.py`.
@@ -179,7 +179,7 @@ Settings come from `MIZAN_*` environment variables (`MIZAN_PROVIDER`, `MIZAN_OLL
 │   ├── eval/            # paired suite, adversarial suite, metrics, durable runner
 │   ├── db/              # synthetic database builder, Spider loader
 │   └── api.py, cli.py, config.py, logging.py, errors.py
-├── tests/               # 218 tests, including tests/test_security.py
+├── tests/               # 239 tests, including tests/test_security.py
 ├── scripts/             # run_eval.py, rescore.py, report.py
 ├── runs/                # raw eval results for both models
 ├── data/                # glossary (the database itself is built by `mizan build-db`)

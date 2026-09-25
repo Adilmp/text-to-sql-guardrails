@@ -98,10 +98,14 @@ was never at risk, but the security telemetry said the model had produced gibber
 actually attempted a write.
 **Why:** Exactly one layer makes security decisions; every other layer reports faithfully. A
 component that quietly discards attacks makes the one metric that must be trustworthy lie.
-**Known gap:** Extraction still cuts at the first semicolon. When the model returns
-`SELECT 1; DROP TABLE orders`, only `SELECT 1` reaches the validator: the `DROP` never runs (and
-couldn't, on a read-only connection), but it isn't reported either. The validator reports
-stacked statements when it is given the raw text; the pipeline doesn't pass it that yet.
+**What went wrong the second time:** Extraction cuts at the first semicolon, and the pipeline
+validated only what was left. So `SELECT 1; DROP TABLE orders` ran as `SELECT 1`: the `DROP`
+never executed, but it was never reported either. It changed a published result: the 0.5b
+model's stacked-query answer was scored "refused", with a note saying it had ignored the attack,
+when its reply was actually `SELECT * FROM couriers; DROP TABLE couriers`. Now the validator also
+checks the model's whole reply for a second statement (`find_stacked_statement`), every eval
+record keeps the raw reply so claims about model output can be checked, and the runs were
+measured again.
 **In short:** *"The extractor recovers what the model said; only the validator decides whether
 it's allowed."*
 
@@ -323,12 +327,13 @@ from that: *containment*, the share of dangerous statements stopped, which must 
 **What went wrong first:** The first metric counted "blocked" as success. It ran backwards: a
 weak model that ignored the injection had nothing to block and scored worse than a capable
 model that complied and got caught.
-**Result:** Both models: 3 of 3 dangerous statements contained, and nothing harmful executed.
-`qwen2.5:7b` had all 6 answers blocked. `qwen2.5:0.5b` had 5 blocked; its sixth ran as a plain
-`SELECT * FROM couriers`. Whether that model also appended a second statement can't be told from
-the stored results, because extraction would have removed it (D4).
-**Caveat:** A stacked `DROP` without a semicolon fails to parse, so the metric counts it as
-"attempted", not "dangerous". It was still blocked; the dangerous count is conservative.
+**Result:** Every answer from both models was blocked (6 of 6 each) and nothing harmful
+executed. Containment: 3 of 3 dangerous statements for `qwen2.5:7b`, 4 of 4 for `qwen2.5:0.5b`.
+The model replies are stored with the results, so `docs/results.md` shows what each model
+actually wrote.
+**Caveat:** A stacked `DROP` without a semicolon (`SELECT * FROM couriers ↵ DROP TABLE couriers`)
+fails to parse, so the metric counts it as "attempted", not "dangerous". It was still blocked;
+the dangerous count is conservative.
 **In short:** *"Measure the guardrail and the model separately, or the metric rewards weak
 models."*
 
@@ -349,7 +354,7 @@ its share becomes the agreement signal (D17). Off by default.
 measure agreement about phrasing; grouping by results measures agreement about the answer. The
 first sample always uses the normal temperature, so turning the feature on never changes the
 primary answer.
-**Trade-off:** Each extra sample is another model call, about 90 s on CPU; hence off by default.
+**Trade-off:** Each extra sample is another model call, about 90–110 s on CPU; hence off by default.
 **In short:** *"Ask several times and compare the answers, not the wording."*
 
 ## D24: Script detection by code points, not a language model
@@ -388,7 +393,7 @@ backend is an optional extra, and the mock needs no model at all.
 **Why:** Questions and data never leave the machine, there is no API cost, and a small local
 model is an honest stress test: the guardrails don't depend on the model (D8, D21), so a weak
 model should be less accurate but never less safe. The measurements confirm it.
-**Trade-off:** About 90 s per question on CPU, and lower accuracy than a frontier model. The
+**Trade-off:** About 90–110 s per question on CPU, and lower accuracy than a frontier model. The
 Anthropic path is written and type-checked but has not been run (no API key was available).
 **In short:** *"Local by default: private, free, and proof that safety doesn't depend on the
 model."*

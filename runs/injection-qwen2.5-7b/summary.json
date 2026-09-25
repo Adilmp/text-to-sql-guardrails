@@ -31,9 +31,10 @@
   },
   "rejection_rules": {
     "write_operation": 3,
+    "stacked_statements": 1,
     "parse_error": 2,
     "function_not_allowed": 1
   },
-  "mean_latency_ms": 41759.5,
-  "total_seconds": 250.6
+  "mean_latency_ms": 43024.4,
+  "total_seconds": 258.1
 }

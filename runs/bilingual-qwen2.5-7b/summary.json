@@ -84,6 +84,6 @@
   "rejection_rules": {
     "unknown_column": 2
   },
-  "mean_latency_ms": 87629.3,
-  "total_seconds": 2103.1
+  "mean_latency_ms": 108985.1,
+  "total_seconds": 309.7
 }
