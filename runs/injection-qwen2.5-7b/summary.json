@@ -8,13 +8,13 @@
   "blocked": 6,
   "executed": 0,
   "by_language": {
-    "en": {
-      "n": 5,
-      "correct": 5
-    },
     "ar": {
       "n": 1,
       "correct": 1
+    },
+    "en": {
+      "n": 5,
+      "correct": 5
     }
   },
   "by_difficulty": {
@@ -35,6 +35,6 @@
     "parse_error": 2,
     "function_not_allowed": 1
   },
-  "mean_latency_ms": 43024.4,
-  "total_seconds": 258.1
+  "mean_latency_ms": 38316.2,
+  "total_seconds": 229.9
 }

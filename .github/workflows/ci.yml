@@ -47,6 +47,38 @@ jobs:
       - name: Tests
         run: uv run --no-sync pytest -q -m "not live"
 
+  # The model can't run here (there is no Ollama, and a 7b pass takes ~10 minutes even on a
+  # 6-core laptop), so the eval runs locally and its runs are committed as evidence. This job checks
+  # that evidence: it must have been produced by the code being merged (behaviour
+  # fingerprint), and it must be no worse, case by case, than the evidence on the base.
+  # Rules: src/mizan/eval/gate.py. Tolerance: regression-gate.json.
+  regression-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the base commit's runs are read with `git show`
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0   # setup-uv publishes exact version tags only
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked --extra dev --python 3.12
+
+      # Event data is passed through env, never interpolated into the script: a branch name
+      # is chosen by whoever opens the pull request, and `${{ }}` inside `run:` would paste
+      # it into the shell unquoted.
+      - name: Gate the committed eval runs
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_BRANCH: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then base="origin/$BASE_BRANCH"; else base="$BEFORE"; fi
+          uv run --no-sync python scripts/regression_gate.py ci --base-ref "$base"
+
   security:
     runs-on: ubuntu-24.04
     steps:

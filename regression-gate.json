@@ -1,0 +1,11 @@
+{
+  "notes": [
+    "Policy for scripts/regression_gate.py. Changing this file loosens or tightens the gate, so it is reviewed like code.",
+    "gated_runs: the runs CI checks. Their committed evidence must come from the current code (behaviour fingerprint), and must not regress against the base branch.",
+    "max_regressions: how many cases may go from right to wrong. Set from measured run-to-run noise (DECISIONS.md D28), not by feel.",
+    "accepted: deliberate regressions, each with a reason. Remove an entry once the baseline has been updated; the gate lists entries that no longer match anything."
+  ],
+  "gated_runs": ["bilingual-qwen2.5-7b", "injection-qwen2.5-7b"],
+  "max_regressions": 0,
+  "accepted": []
+}

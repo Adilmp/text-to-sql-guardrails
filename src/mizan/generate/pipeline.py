@@ -76,6 +76,10 @@ class Answer:
     model: str
     latency_ms: float
     error: str | None = None
+    #: Stable machine-readable code for ``error`` when it came from a ``MizanError`` (for
+    #: example ``provider_unavailable``). Lets the eval tell "the model server was down"
+    #: from "the model answered wrongly" without parsing messages.
+    error_code: str | None = None
     candidates: list[Candidate] = field(default_factory=list)
     agreement: float | None = None
     #: The model's reply exactly as received, before extraction. Kept so an answer can be
@@ -99,6 +103,7 @@ class Answer:
             "model": self.model,
             "latency_ms": round(self.latency_ms, 2),
             "error": self.error,
+            "error_code": self.error_code,
             "agreement": self.agreement,
             "n_candidates": len(self.candidates),
             "raw_output": self.raw_output,
@@ -142,7 +147,7 @@ class TextToSQL:
         try:
             candidates = self._sample(system, user)
         except ProviderError as exc:
-            return self._failed(question, cleaned, script, started, str(exc))
+            return self._failed(question, cleaned, script, started, str(exc), code=exc.code)
 
         if not candidates:
             return self._failed(question, cleaned, script, started, "model produced no output")
@@ -264,7 +269,14 @@ class TextToSQL:
         return winner[0], agreement
 
     def _failed(
-        self, question: str, cleaned: str, script: Script, started: float, error: str
+        self,
+        question: str,
+        cleaned: str,
+        script: Script,
+        started: float,
+        error: str,
+        *,
+        code: str | None = None,
     ) -> Answer:
         return Answer(
             question=question,
@@ -278,4 +290,5 @@ class TextToSQL:
             model=self.provider.model,
             latency_ms=(time.perf_counter() - started) * 1000,
             error=error,
+            error_code=code,
         )

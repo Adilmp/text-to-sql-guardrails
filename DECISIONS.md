@@ -32,6 +32,9 @@ Each one ends with **In short**: the decision and its reason in one line.
 | D25 | What runs is exactly what was validated | Safety |
 | D26 | A fallback must never look like a real answer | Engineering |
 | D27 | A local model by default | Engineering |
+| D28 | Regressions are gated case by case, on committed evidence | Evaluation |
+| D29 | The gate's tolerance comes from measured noise | Evaluation |
+| D30 | Eval cases run grouped by language, so the prompt is reused | Evaluation |
 
 ---
 
@@ -354,7 +357,8 @@ its share becomes the agreement signal (D17). Off by default.
 measure agreement about phrasing; grouping by results measures agreement about the answer. The
 first sample always uses the normal temperature, so turning the feature on never changes the
 primary answer.
-**Trade-off:** Each extra sample is another model call, about 90–110 s on CPU; hence off by default.
+**Trade-off:** Each extra sample is another model call. Its prompt is identical, so Ollama reuses
+the processed prompt (D30) and the cost is mostly generation; still off by default.
 **In short:** *"Ask several times and compare the answers, not the wording."*
 
 ## D24: Script detection by code points, not a language model
@@ -393,7 +397,73 @@ backend is an optional extra, and the mock needs no model at all.
 **Why:** Questions and data never leave the machine, there is no API cost, and a small local
 model is an honest stress test: the guardrails don't depend on the model (D8, D21), so a weak
 model should be less accurate but never less safe. The measurements confirm it.
-**Trade-off:** About 90–110 s per question on CPU, and lower accuracy than a frontier model. The
+**Trade-off:** About 15 s per question on a 6-core CPU once the prompt is reused (70–135 s for the
+first question in each language, D30), and lower accuracy than a frontier model. The
 Anthropic path is written and type-checked but has not been run (no API key was available).
 **In short:** *"Local by default: private, free, and proof that safety doesn't depend on the
 model."*
+
+## D28: Regressions are gated case by case, on committed evidence
+**Decision:** `scripts/regression_gate.py` compares a new eval run with the committed one case
+by case. Three verdicts: PASS, FAIL (a safety failure, or more right-to-wrong cases than
+`regression-gate.json` allows) and INCONCLUSIVE (broken, missing, mismatched or stale
+evidence). CI runs no model: it checks that the committed runs were produced by the code being
+merged (a *behaviour fingerprint*), and compares them with the base branch's runs read from git.
+**Alternatives:** Gating on aggregate accuracy; running the eval in CI.
+**Why:**
+- **Aggregates hide regressions.** 19/24 before and 19/24 after can mean one question broke and
+  another was fixed. The gate names every case that flipped, with both queries, and reports an
+  exact McNemar p-value alongside (reported, not enforced: at n=24 it rarely gets small).
+- **CI can't run the model.** Runners have no Ollama, and a 7b pass takes about 10 minutes even
+  on a 6-core laptop. Committing the evidence and fingerprinting what produced it keeps CI fast and still
+  makes stale numbers impossible to merge.
+- **A broken run is not a worse model.** The first noise measurement lost its Ollama server
+  mid-run and "fell" from 19/24 to 2/24. Outcomes now carry each error's stable code (the codes
+  `errors.py` already defined), so provider failures are excluded and flagged. Real regressions
+  among the cases that did run still fail: a broken run can hide a regression, not invent one.
+**What the fingerprint covers:** everything between the question and the verdict: text cleanup,
+prompt, providers and their defaults, extraction, guardrails, execution, confidence, the eval
+cases, scoring, and the database generator and glossary. Not the API, CLI, logging or the gate
+itself, which can't change an answer; a fingerprint that moved on every edit to those would
+teach people to ignore it.
+**Found on the way:** re-running into an existing run directory without `--resume` appended to
+the old `outcomes.jsonl`, leaving two runs' records in one file. A fresh run now replaces it.
+**In short:** *"Compare questions, not percentages, and only trust numbers produced by the code
+you're merging."*
+
+## D29: The gate's tolerance comes from measured noise
+**Decision:** `max_regressions` is 0: any case going from right to wrong fails the gate, unless
+it is listed in `regression-gate.json` with a reason.
+**Why:** A tolerance should be set just above run-to-run noise, so the noise was measured
+before choosing it. `qwen2.5:7b` was re-run on unchanged code (Ollama 0.24.0, temperature 0,
+the same CPU) and compared with the committed run. **The model's raw replies were byte-identical
+on all 30 cases** (24 paired + 6 adversarial). With no noise to absorb, any allowance above 0
+would only hide real regressions. An accepted regression needs a written reason, and entries
+that no longer match anything are reported, so the list can't quietly grow.
+**Limitation:** The determinism was measured on one machine and one Ollama version. A different
+Ollama build, quantisation or CPU can change floating-point results, and with them the replies.
+After changing any of those, re-run the eval twice and gate the two runs against each other
+before trusting a FAIL (or raising the tolerance).
+**In short:** *"Measure the noise, then set the threshold: here the noise was zero, so is the
+tolerance."*
+
+## D30: Eval cases run grouped by language, so the prompt is reused
+**Decision:** The runner executes the cases grouped by the question's script (a stable sort, so
+suite order holds within a group). Outcomes are keyed by case id, so nothing downstream depends
+on the order.
+**Why:** On a CPU, most of each answer's time is spent processing the prompt (about 1,300–1,700
+tokens of schema and rules), not writing the SQL. Ollama reuses the processed prompt when a request
+starts the way the previous one did. The English and Arabic system prompts differ from their first
+character, and the suite alternates the two languages, so every case re-read its whole prompt.
+Measured before changing anything, with `qwen2.5:0.5b`: 22 s of prompt processing after a
+language switch, 3 s after a question in the same language.
+**Result:** `qwen2.5:7b` went from 109 s to **15 s per question** on average (16.4 s and 14.5 s
+in two runs; both suites in about 10 minutes instead of about 50), and its replies were **byte-identical on all 30 cases**, so the
+regression gate passed with nothing to accept. The first question in each language still takes
+70–135 s.
+**Alternative not taken (yet):** Putting the shared schema first and the language-specific
+rules last would let even alternating questions reuse most of the prompt, which is what a user
+who switches languages would feel. It changes what the model reads, so it needs its own measured
+run through the gate.
+**In short:** *"Find where the time goes before buying a faster model: here it was a prompt
+being re-read, and the same model became about 7× faster with identical answers."*

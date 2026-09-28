@@ -2,7 +2,11 @@
 """Run the bilingual + injection suites for one model.
 
 Usage:
-    python scripts/run_eval.py ollama qwen2.5:7b [--limit N] [--resume]
+    python scripts/run_eval.py ollama qwen2.5:7b [--limit N] [--resume] [--run-dir DIR]
+
+``--run-dir`` writes the run somewhere other than ``runs/``. The regression gate needs this:
+a new run written into ``runs/`` would overwrite the very baseline it is meant to be compared
+with (``scripts/regression_gate.py run`` does this for you).
 
 Kept as a script rather than a CLI subcommand because it is the thing most likely to be
 launched detached and left running for an hour, and a script is easier to point at with
@@ -30,12 +34,20 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--skip-injection", action="store_true")
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help="where to write the run (default: runs/)",
+    )
     args = parser.parse_args()
 
     overrides: dict[str, object] = {
         "provider": args.provider,
         "db_path": REPO_ROOT / "data" / "gulf_logistics.sqlite",
     }
+    if args.run_dir is not None:
+        overrides["run_dir"] = args.run_dir.resolve()
     if args.provider == "ollama":
         overrides["ollama_model"] = args.model
     elif args.provider == "anthropic":

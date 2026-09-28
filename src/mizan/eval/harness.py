@@ -1,8 +1,9 @@
 """The evaluation runner.
 
-Durability is the design priority here, for a mundane reason: on CPU inference a single
-question takes 60–120 seconds, so a 24-case suite is a 40-minute run. Losing that to a
-crash at case 23 is unacceptable, so **every case is appended to a JSONL file the moment it
+Durability is the design priority here, for a mundane reason: on CPU inference a question
+whose prompt is not cached takes 60–135 seconds, and even with the prompt reused (see the
+ordering in ``run_suite``) a full run takes minutes. Losing that to a crash at case 23 is
+unacceptable, so **every case is appended to a JSONL file the moment it
 completes**. A run that dies half way still leaves 23 usable measurements, and
 ``--resume`` skips cases already recorded. Incremental writes are cheap insurance.
 """
@@ -20,8 +21,10 @@ from ..config import Settings
 from ..errors import MizanError
 from ..generate import TextToSQL
 from ..logging import get_logger, new_run_id, run_context
+from ..nl import detect_script
 from ..providers import build_provider
 from ..schema import load_catalog
+from .fingerprint import behaviour_fingerprint
 from .metrics import (
     CaseOutcome,
     SuiteSummary,
@@ -89,12 +92,28 @@ def run_suite(
     cases = list(cases if cases is not None else build_suite())
     if limit is not None:
         cases = cases[:limit]
+    # Run the cases grouped by the system prompt they get, which depends on the question's
+    # script. Ollama reuses the processed prompt when a request starts the way the previous
+    # one did. The suite alternates English and Arabic, and the two system prompts differ
+    # from their first character, so every case used to re-read ~1,500 prompt tokens from
+    # scratch; grouped, only the question is new. qwen2.5:7b went from 109 s to 16 s per
+    # question with byte-identical replies (DECISIONS.md D30). The sort is stable, so suite
+    # order holds within a group, and outcomes are keyed by case id, so nothing downstream
+    # depends on the order.
+    cases.sort(key=lambda case: detect_script(case.question).value)
 
     rid = run_id or f"{suite_name}-{settings.provider}-{_slug(settings)}-{new_run_id()}"
     paths = RunPaths(settings.run_dir / rid)
     paths.ensure()
 
     completed = load_completed(paths.outcomes) if resume else {}
+    if not resume and paths.outcomes.exists():
+        # A fresh run must not append to an old one. Before this, re-running into an existing
+        # directory left both runs' lines in one file: the summary was right (it is built in
+        # memory) but outcomes.jsonl held 48 records for a 24-case suite, and anything that
+        # read it back - a later --resume, the regression gate - saw a mix of two runs.
+        logger.info("starting fresh: replacing previous outcomes", extra={"run_id": rid})
+        paths.outcomes.unlink()
     if completed:
         logger.info("resuming run", extra={"already_done": len(completed), "run_id": rid})
     elif resume:
@@ -113,7 +132,14 @@ def run_suite(
 
     paths.config.write_text(
         json.dumps(
-            {"settings": settings.redacted_dict(), "suite": suite_name, "run_id": rid},
+            {
+                "settings": settings.redacted_dict(),
+                "suite": suite_name,
+                "run_id": rid,
+                # Which code produced this run. The regression gate refuses evidence whose
+                # fingerprint doesn't match the code being merged (see eval/fingerprint.py).
+                "fingerprint": behaviour_fingerprint(),
+            },
             indent=2,
             ensure_ascii=False,
         ),
@@ -187,6 +213,7 @@ def _run_case(engine: TextToSQL, case: EvalCase, settings: Settings) -> CaseOutc
             error=str(exc),
             confidence=0.0,
             latency_ms=0.0,
+            error_code=exc.code,
         )
 
     blocked = answer.guardrail is not None and not answer.guardrail.ok
@@ -220,6 +247,7 @@ def _run_case(engine: TextToSQL, case: EvalCase, settings: Settings) -> CaseOutc
         confidence=answer.confidence.score,
         latency_ms=answer.latency_ms,
         raw_output=answer.raw_output,
+        error_code=answer.error_code,
     )
 
 
@@ -241,6 +269,7 @@ def _outcome_from_record(record: dict[str, Any]) -> CaseOutcome:
         confidence=record.get("confidence", 0.0),
         latency_ms=record.get("latency_ms", 0.0),
         raw_output=record.get("raw_output"),
+        error_code=record.get("error_code"),
     )
 
 

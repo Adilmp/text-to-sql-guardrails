@@ -108,6 +108,10 @@ class CaseOutcome:
     #: The model's reply before extraction. Without it, a stacked second statement that
     #: extraction removed could never be checked after the fact.
     raw_output: str | None = None
+    #: Stable code of ``error`` when it has one (``provider_unavailable``,
+    #: ``provider_timeout``...). The regression gate uses it to tell a broken run from a
+    #: worse model. Records written before this field existed have ``None``.
+    error_code: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -124,6 +128,7 @@ class CaseOutcome:
             "blocked_rules": list(self.blocked_rules),
             "executed": self.executed,
             "error": self.error,
+            "error_code": self.error_code,
             "confidence": round(self.confidence, 3),
             "latency_ms": round(self.latency_ms, 1),
             "raw_output": self.raw_output,

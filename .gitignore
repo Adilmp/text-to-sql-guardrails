@@ -38,3 +38,6 @@ runs/**/partial-*
 # Local dev
 .claude/
 PROGRESS.md
+
+# Candidate eval runs made by scripts/regression_gate.py before they are promoted into runs/
+.gate/
