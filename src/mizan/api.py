@@ -17,12 +17,16 @@ still return real error codes.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
+import uuid
+from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
@@ -33,7 +37,7 @@ from .config import Settings
 from .errors import MizanError, ProviderError
 from .generate import TextToSQL
 from .logging import configure, get_logger, run_context
-from .present import chart_spec, summarize
+from .present import chart_spec, explain, summarize
 from .providers import build_provider
 from .questions import Suggester, curated_questions, names_from_db
 from .schema import load_catalog
@@ -46,6 +50,13 @@ WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2_000)
     samples: int = Field(default=1, ge=1, le=5)
+
+
+class FeedbackRequest(BaseModel):
+    #: The id the server gave the answer. The SQL itself is never accepted from the client:
+    #: a verdict can only be about a query this server produced and validated.
+    answer_id: str = Field(..., min_length=8, max_length=64)
+    verdict: Literal["up", "down"]
 
 
 class AskResponse(BaseModel):
@@ -70,6 +81,12 @@ class AskResponse(BaseModel):
     summary: str | None = None
     #: Which chart fits the result: {"type": "bar" | "line", "label": col, "value": col}.
     chart: dict[str, Any] | None = None
+    #: The answer as plain steps in the question's language (present.explain).
+    explanation: str | None = None
+    #: Pass back to /api/feedback to say whether the answer was right.
+    answer_id: str | None = None
+    #: Someone already reported exactly this query as the wrong answer to this question.
+    reported: bool = False
 
 
 #: How often an idle server re-sends its warm-up. Well inside the 30-minute keep-alive, so the
@@ -94,6 +111,10 @@ def create_app(
     configure(cfg.log_level, cfg.log_dir, console=False)
 
     state: dict[str, Any] = {"warmup": "running", "last_used": time.monotonic()}
+    #: Recent answers by id, so feedback names an answer instead of carrying SQL. Bounded:
+    #: feedback is given right after an answer, not days later.
+    recent: OrderedDict[str, tuple[str, str]] = OrderedDict()
+    recent_lock = threading.Lock()
     ready = threading.Event()
     stop_keep_warm = threading.Event()
 
@@ -211,6 +232,29 @@ def create_app(
             "model": provider.model if provider else None,
         }
 
+    @app.post("/api/feedback")
+    def feedback(request: FeedbackRequest) -> dict[str, Any]:
+        """👍 marks an answer verified; 👎 stops it being served from the cache and flags it
+        for the next person. Every verdict is logged for review (logs/feedback.jsonl)."""
+        with recent_lock:
+            entry = recent.get(request.answer_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="unknown or expired answer id")
+        question, sql = entry
+        served: CachedTextToSQL = state["served"]
+        up = request.verdict == "up"
+        served.verdict(question, sql, up)
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "verdict": request.verdict,
+            "question": question,
+            "sql": sql,
+            "model": state["provider"].model,
+        }
+        with (cfg.log_dir / "feedback.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return {"ok": True, "status": "verified" if up else "reported"}
+
     @app.get("/api/suggest")
     async def suggest(
         q: str = Query("", max_length=300), limit: int = Query(8, ge=1, le=20)
@@ -219,10 +263,11 @@ def create_app(
         served: CachedTextToSQL = state["served"]
         cache = state.get("cache")
 
-        def is_cached(key: str) -> bool:
-            return cache is not None and cache.has(served.context, key)
+        def status_of(key: str) -> int | None:
+            entry = cache.status(served.context, key) if cache is not None else None
+            return entry[1] if entry else None
 
-        found = state["suggester"].suggest(q, is_cached=is_cached, limit=limit)
+        found = state["suggester"].suggest(q, status_of=status_of, limit=limit)
         return {"suggestions": [s.to_dict() for s in found]}
 
     @app.get("/api/schema")
@@ -233,6 +278,7 @@ def create_app(
             "tables": {
                 name: {
                     "columns": [c.name for c in table.columns],
+                    "description": table.description,
                     "aliases_ar": list(table.aliases_ar),
                     "aliases_ur": list(table.aliases_ur),
                     "row_count": table.row_count,
@@ -272,6 +318,13 @@ def create_app(
                 raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         guardrail = answer.guardrail
+        answer_id = None
+        if answer.ok and answer.sql:
+            answer_id = uuid.uuid4().hex
+            with recent_lock:
+                recent[answer_id] = (answer.question, answer.sql)
+                while len(recent) > 500:
+                    recent.popitem(last=False)
         return AskResponse(
             ok=answer.ok,
             question=answer.question,
@@ -296,6 +349,13 @@ def create_app(
             if answer.result
             else None,
             chart=chart_spec(answer.result) if answer.result else None,
+            explanation=explain(answer.sql, state["catalog"], answer.script)
+            if answer.ok and answer.sql
+            else None,
+            answer_id=answer_id,
+            reported=bool(answer.sql)
+            and hit is None
+            and served.reported(request.question, answer.sql or ""),
         )
 
     return app

@@ -40,6 +40,7 @@ first.
 | Cache | Every cached query is validated again before it runs, and evicted if it fails; only confident, unrepaired answers are stored | SQL planted in the cache file; one bad answer becoming sticky for every user |
 | Suggestions | Offered only from the curated question list, never from cached questions | One user's questions shown to the next |
 | CSV export | Text cells starting with `= + - @` are prefixed with `'` | CSV/formula injection through stored values (customer names) |
+| Feedback | The browser sends an answer id, never SQL; the server looks its own query up | Planting a "verified" query through the feedback endpoint |
 | Runtime | Read-only URI (`file:...?mode=ro`) | Writes, even with the validator bypassed |
 | Runtime | `PRAGMA query_only = ON` | Writes on a connection that opened read-write |
 | Runtime | Extension loading disabled | `load_extension` if the allowlist were bypassed |
@@ -237,4 +238,5 @@ bounds, security headers, and the repair loop's two channels back into the promp
 - Python 3.11+ so `SQLITE_LIMIT_LENGTH` is enforced at the engine
 - Removing `/api/schema`, or gating it behind authorisation
 - Audit logging tied to user identity (structured logs exist; identity does not)
+- Restricting 👍 "verified" to data owners: today any visitor can verify or report an answer
 - A policy decision on which columns may be sampled into prompts (§2.2)

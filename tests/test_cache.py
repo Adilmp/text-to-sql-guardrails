@@ -242,3 +242,34 @@ class TestPrefill:
         assert cache.has("ctx", "k") and cache.has("ctx", "k")
         entry = cache.get("ctx", "k")
         assert entry is not None and entry[2] == 1  # first counted hit
+
+
+class TestStatus:
+    def test_an_old_cache_file_gains_the_status_column(self, tmp_path: Path) -> None:
+        """Files written before verdicts existed keep working: rows read as "normal"."""
+        import sqlite3
+
+        path = tmp_path / "old.sqlite"
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE answers (context TEXT NOT NULL, key TEXT NOT NULL, question TEXT"
+            " NOT NULL, sql TEXT NOT NULL, confidence REAL NOT NULL, created_at TEXT NOT NULL,"
+            " hits INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (context, key))"
+        )
+        conn.execute("INSERT INTO answers VALUES ('c', 'k', 'q', 'SELECT 1', 1.0, 'now', 0)")
+        conn.commit()
+        conn.close()
+        cache = AnswerCache(path)
+        assert cache.status("c", "k") == ("SELECT 1", 0)
+        entry = cache.get("c", "k")
+        assert entry is not None and entry[4] == 0
+
+    def test_a_reported_query_is_not_served_or_cached_again(self, tmp_path: Path) -> None:
+        cache = AnswerCache(tmp_path / "c.sqlite")
+        cache.put("c", "k", "q", "SELECT 1", 1.0)
+        cache.mark("c", "k", "q", "SELECT 1", -1)
+        assert cache.get("c", "k") is None
+        cache.put("c", "k", "q", "SELECT 1", 1.0)  # the model gave the same answer again
+        assert cache.status("c", "k") == ("SELECT 1", -1)
+        cache.put("c", "k", "q", "SELECT 2", 1.0)  # a different answer replaces the report
+        assert cache.status("c", "k") == ("SELECT 2", 0)

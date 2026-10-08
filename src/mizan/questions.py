@@ -240,9 +240,11 @@ class Suggestion:
     question: str
     #: Cached for the current prompt and model: picking it answers in milliseconds.
     instant: bool
+    #: A person confirmed the cached answer (👍).
+    verified: bool = False
 
     def to_dict(self) -> dict[str, object]:
-        return {"question": self.question, "instant": self.instant}
+        return {"question": self.question, "instant": self.instant, "verified": self.verified}
 
 
 class Suggester:
@@ -252,8 +254,11 @@ class Suggester:
     Urdu letter variants and digit scripts. Every typed word has to start a word of the
     question; an Arabic-script word of three letters or more may also sit inside one, so
     "طلبات" finds "الطلبات" (the article is written attached). English words don't get that
-    second rule, or "late" would find "chocolate". Cached questions come first, because
-    choosing one answers instantly, then questions in the language being typed.
+    second rule, or "late" would find "chocolate". Verified answers come first, then other
+    cached ones (choosing one answers instantly), then questions in the language being typed.
+
+    ``status_of`` maps a canonical question to its cache status (1 verified, 0 cached,
+    -1 reported) or ``None`` when it isn't cached.
     """
 
     def __init__(self, questions: Iterable[str]) -> None:
@@ -266,31 +271,35 @@ class Suggester:
         return len(self._entries)
 
     def suggest(
-        self, text: str, *, is_cached: Callable[[str], bool], limit: int = 8
+        self, text: str, *, status_of: Callable[[str], int | None], limit: int = 8
     ) -> list[Suggestion]:
         typed = canonical_question(text).split()
         if not typed:
             return []
         prefix = " ".join(typed)
         language = detect_script(text).value
-        ranked: list[tuple[bool, bool, bool, int, str, bool]] = []
+        ranked: list[tuple[bool, bool, bool, bool, int, str, int | None]] = []
         for question, key, tokens, question_language in self._entries:
             if all(_word_matches(word, tokens) for word in typed):
-                instant = is_cached(key)
-                # Sort keys: instant first, then the language being typed, then questions
-                # that start with what was typed, then shorter ones.
+                status = status_of(key)
+                # Sort keys: verified, then instant, then the language being typed, then
+                # questions that start with what was typed, then shorter ones.
                 ranked.append(
                     (
-                        not instant,
+                        status != 1,
+                        status is None or status < 0,
                         question_language != language,
                         not key.startswith(prefix),
                         len(key),
                         question,
-                        instant,
+                        status,
                     )
                 )
         ranked.sort()
-        return [Suggestion(question, instant) for *_, question, instant in ranked[:limit]]
+        return [
+            Suggestion(question, status is not None and status >= 0, status == 1)
+            for *_, question, status in ranked[:limit]
+        ]
 
 
 def _word_matches(word: str, tokens: list[str]) -> bool:

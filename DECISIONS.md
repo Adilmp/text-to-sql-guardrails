@@ -46,6 +46,7 @@ Each one ends with **In short**: the decision and its reason in one line.
 | D39 | New eval cases are reported, not inconclusive; renames are declared | Evaluation |
 | D40 | The answer cache matches only meaning-free variation, and stores SQL, not rows | Serving |
 | D41 | Answers are presented for people: a sentence from the result, a chart, CSV, suggestions | Serving |
+| D42 | Features follow research on what users of these tools need, and stay minimal | Serving |
 
 ---
 
@@ -773,3 +774,34 @@ spreadsheet would otherwise run them as formulas (CSV injection).
 fits is decided in Python (`chart_spec`, tested); the page only draws.
 **In short:** *"Lead with the answer in the user's words, built from the data, and keep the
 evidence one scroll away."*
+
+## D42: Features follow research on what users of these tools need, and stay minimal
+**Decision:** Four additions, each answering a documented need, each small:
+
+| Need (source) | Feature |
+|---|---|
+| Trust: over 60% of business users say they don't trust generated results, mostly because they can't see how the question became a query; in one study, plain-language step-by-step explanations took users from 49% to 89% correct ([NLIDB user study, 2025](https://arxiv.org/html/2511.14718v1)) | **"How:"** under every answer: the query as plain steps in the question's language, built from the syntax tree and the glossary ("counted orders · with customers · only late orders · city = 'Dubai'") |
+| The products people use rely on human-verified question-to-SQL pairs and a feedback loop (Snowflake Cortex Analyst's verified queries, Databricks Genie's trusted assets) | **👍 / 👎**: 👍 marks the cached answer *verified* (suggested first, badged on reuse); 👎 stops it being served from the cache, warns the next person who gets the same query, and is logged (`logs/feedback.jsonl`) for review |
+| Tableau retired Ask Data partly because users still had to know field names and data concepts | **"What can I ask?"**: the tables, in plain words, with their Arabic and Urdu names and sizes |
+| In Pakistan, day-to-day business runs in WhatsApp groups | **Share**, through the phone's share sheet where the browser has one |
+
+**Minimal on screen too:** the answer, its "How:" line and the feedback buttons are what a
+person sees; the SQL, guardrail notes and confidence signals moved into one collapsed
+*Details* section (open automatically when there is no answer, e.g. a blocked query).
+**The explanation is deterministic, like the one-line answer (D41).** An explanation written
+by the model could be wrong in its own way, which defeats its purpose. Glossary definitions are
+recognised by name (the `late order` definition appears as "only late orders", not as two date
+comparisons), whichever order the model wrote a product in (`price * quantity` or
+`quantity * price`). Arabic and Urdu column names come from the glossary's aliases.
+**Feedback can't be used to plant SQL.** The browser sends only the id of an answer this server
+produced; the server looks the query up itself. A 👍 can therefore only vouch for a query that
+already passed the validator, and cached queries are validated again on every use (D40).
+**Two limits, stated:** feedback is unauthenticated, so in a multi-user deployment only data
+owners should be able to verify (SECURITY.md §6); and a 👎 doesn't fix the answer, it routes the
+question back to the model and flags it. Turning reviewed feedback into eval cases and verified
+examples in the prompt is the next step, and it changes the evaluated prompt, so it needs its own
+eval run.
+**Left out on purpose:** follow-up questions ("and in Riyadh?") and asking back when a question
+is ambiguous. Both came up in the research and both are worth doing, but each changes what the
+model is asked, so each needs measuring through the eval and the gate, not just shipping.
+**In short:** *"Build what the research says users need, and nothing that adds a screen."*
