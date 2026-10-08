@@ -196,6 +196,14 @@ class AnswerCache:
             self._conn.commit()
         return str(row[0]), str(row[1]), int(row[2]) + 1, str(row[3])
 
+    def has(self, context: str, key: str) -> bool:
+        """Whether an entry exists, without counting a hit (for pre-filling)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM answers WHERE context = ? AND key = ?", (context, key)
+            ).fetchone()
+        return row is not None
+
     def put(self, context: str, key: str, question: str, sql: str, confidence: float) -> None:
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self._lock:

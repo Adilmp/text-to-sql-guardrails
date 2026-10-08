@@ -730,5 +730,12 @@ fast an answer arrives, not what it is.
 (`keep_alive` of `-1m`; Ollama rejects the string `"-1"`, which briefly broke every question),
 and `/api/health` says whether the warm-up is running, done, or failed, so the page shows
 "warming up" instead of a counter that looks like a hang.
+**Pre-filling:** `scripts/prefill_cache.py` asks the model the questions people are likely to ask
+(the demo examples, every eval question, templated questions for every city, country, status,
+category, segment, courier, warehouse and product in three languages) so they answer instantly
+from the first visit. DDIA ch. 1 calls this precomputing on write to make reads cheap (its
+Twitter timeline example). Two rules: an entry is only ever the model's own answer, stored under
+the same bar as any other, and the eval's gold queries are never planted, because a demo that
+answers its own test questions perfectly would misrepresent the model.
 **In short:** *"Cache what is safe to call the same question, and measure before trusting
 similarity."*

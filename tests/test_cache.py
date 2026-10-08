@@ -210,3 +210,50 @@ class TestServingSettings:
         monkeypatch.setenv("MIZAN_OLLAMA_KEEP_ALIVE", "10m")
         cfg = serving_settings(Settings.from_env(provider="ollama"))
         assert cfg.ollama_keep_alive == "10m"
+
+
+class TestPrefill:
+    """scripts/prefill_cache.py: which questions get asked ahead of time."""
+
+    @staticmethod
+    def _script():  # type: ignore[no-untyped-def]
+        import importlib.util
+
+        path = Path(__file__).resolve().parent.parent / "scripts" / "prefill_cache.py"
+        spec = importlib.util.spec_from_file_location("prefill_cache", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_every_language_every_value_and_no_repeats(self) -> None:
+        script = self._script()
+        names = {
+            "couriers": [("Gulf Express", "الخليج السريع")],
+            "warehouses": [("Dubai Hub", "مستودع دبي")],
+            "products": [("Prayer Rug", "سجادة صلاة")],
+        }
+        questions = script.all_questions(names)
+        texts = [q for _, q in questions]
+        keys = [canonical_question(q) for q in texts]
+        assert len(keys) == len(set(keys))  # no question is asked twice
+        assert texts[: len(script.EXAMPLES)] == list(script.EXAMPLES)  # most likely first
+        assert "how many customers are in Riyadh?" in texts
+        assert "كم عدد العملاء في الرياض؟" in texts
+        assert "ریاض میں کتنے کسٹمرز ہیں؟" in texts
+        assert "how many orders did Gulf Express deliver late?" in texts
+
+    def test_gold_answers_are_never_planted(self) -> None:
+        """The script asks the model; it must not touch the eval suites' gold SQL."""
+        source = (
+            Path(__file__).resolve().parent.parent / "scripts" / "prefill_cache.py"
+        ).read_text(encoding="utf-8")
+        assert "gold_sql" not in source and "gold_queries" not in source
+
+    def test_has_does_not_count_a_hit(self, tmp_path: Path) -> None:
+        cache = AnswerCache(tmp_path / "c.sqlite")
+        assert not cache.has("ctx", "k")
+        cache.put("ctx", "k", "q", "SELECT 1", 1.0)
+        assert cache.has("ctx", "k") and cache.has("ctx", "k")
+        entry = cache.get("ctx", "k")
+        assert entry is not None and entry[2] == 1  # first counted hit
