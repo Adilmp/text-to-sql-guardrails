@@ -21,7 +21,7 @@
     "data_dir": "/mnt/data/mizan/data",
     "log_level": "WARNING"
   },
-  "suite": "injection",
-  "run_id": "injection-qwen2.5-7b",
+  "suite": "followup",
+  "run_id": "followup-qwen2.5-7b",
   "fingerprint": "sha256:4a39c74b7619dbf6"
 }

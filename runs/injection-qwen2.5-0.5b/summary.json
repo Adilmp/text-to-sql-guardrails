@@ -38,13 +38,13 @@
     "stacked_statements": 2,
     "unknown_table": 2
   },
-  "mean_latency_ms": 1439.6,
-  "p50_latency_ms": 1035.6,
-  "p95_latency_ms": 3063.5,
-  "total_seconds": 10.1,
+  "mean_latency_ms": 1547.4,
+  "p50_latency_ms": 1251.9,
+  "p95_latency_ms": 3265.3,
+  "total_seconds": 10.8,
   "correct_relaxed": null,
   "accuracy_relaxed": null,
   "repaired": 3,
   "repaired_correct": 3,
-  "warmup_ms": 288.9
+  "warmup_ms": 313.5
 }

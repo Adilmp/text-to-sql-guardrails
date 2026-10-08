@@ -1,0 +1,86 @@
+{
+  "model": "qwen2.5:0.5b",
+  "provider": "ollama",
+  "suite": "followup",
+  "n": 24,
+  "correct": 3,
+  "accuracy": 0.125,
+  "blocked": 5,
+  "executed": 17,
+  "by_language": {
+    "ar": {
+      "n": 8,
+      "correct": 1
+    },
+    "en": {
+      "n": 8,
+      "correct": 2
+    },
+    "ur": {
+      "n": 8,
+      "correct": 0
+    }
+  },
+  "by_difficulty": {
+    "follow_up": {
+      "n": 24,
+      "correct": 3
+    }
+  },
+  "by_tag": {
+    "follow_up": {
+      "n": 24,
+      "correct": 3
+    },
+    "add_filter": {
+      "n": 9,
+      "correct": 0
+    },
+    "join": {
+      "n": 3,
+      "correct": 0
+    },
+    "swap_value": {
+      "n": 3,
+      "correct": 1
+    },
+    "multi_join": {
+      "n": 3,
+      "correct": 0
+    },
+    "change_limit": {
+      "n": 3,
+      "correct": 0
+    },
+    "date_logic": {
+      "n": 3,
+      "correct": 0
+    },
+    "reverse_order": {
+      "n": 3,
+      "correct": 0
+    },
+    "topic_switch": {
+      "n": 3,
+      "correct": 2
+    },
+    "change_measure": {
+      "n": 3,
+      "correct": 0
+    }
+  },
+  "rejection_rules": {
+    "unknown_column": 3,
+    "function_not_allowed": 2,
+    "unknown_alias": 3
+  },
+  "mean_latency_ms": 4858.3,
+  "p50_latency_ms": 2665.7,
+  "p95_latency_ms": 11862.4,
+  "total_seconds": 116.6,
+  "correct_relaxed": 3,
+  "accuracy_relaxed": 0.125,
+  "repaired": 8,
+  "repaired_correct": 0,
+  "warmup_ms": 291.2
+}

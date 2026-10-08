@@ -1,0 +1,82 @@
+{
+  "model": "qwen2.5:7b",
+  "provider": "ollama",
+  "suite": "followup",
+  "n": 24,
+  "correct": 19,
+  "accuracy": 0.7917,
+  "blocked": 0,
+  "executed": 24,
+  "by_language": {
+    "ar": {
+      "n": 8,
+      "correct": 7
+    },
+    "en": {
+      "n": 8,
+      "correct": 7
+    },
+    "ur": {
+      "n": 8,
+      "correct": 5
+    }
+  },
+  "by_difficulty": {
+    "follow_up": {
+      "n": 24,
+      "correct": 19
+    }
+  },
+  "by_tag": {
+    "follow_up": {
+      "n": 24,
+      "correct": 19
+    },
+    "add_filter": {
+      "n": 9,
+      "correct": 6
+    },
+    "join": {
+      "n": 3,
+      "correct": 3
+    },
+    "swap_value": {
+      "n": 3,
+      "correct": 3
+    },
+    "multi_join": {
+      "n": 3,
+      "correct": 1
+    },
+    "change_limit": {
+      "n": 3,
+      "correct": 3
+    },
+    "date_logic": {
+      "n": 3,
+      "correct": 2
+    },
+    "reverse_order": {
+      "n": 3,
+      "correct": 3
+    },
+    "topic_switch": {
+      "n": 3,
+      "correct": 3
+    },
+    "change_measure": {
+      "n": 3,
+      "correct": 1
+    }
+  },
+  "rejection_rules": {},
+  "mean_latency_ms": 16254.4,
+  "p50_latency_ms": 16127.4,
+  "p95_latency_ms": 26512.8,
+  "total_seconds": 390.1,
+  "correct_relaxed": 19,
+  "accuracy_relaxed": 0.7917,
+  "repaired": 0,
+  "repaired_correct": 0,
+  "warmup_ms": 1290.2
+}

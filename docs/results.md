@@ -14,15 +14,22 @@ one-off warm-up, which is reported on its own.
 
 | Model | Cases | Strict | Extra columns allowed | English | Arabic | Urdu | Hard | p50 / p95 latency |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `qwen2.5:0.5b` | 60 | **17/60 (28.3%)** | 17/60 (28.3%) | 10/20 (50%) | 6/20 (30%) | 1/20 (5%) | 1/27 (4%) | 1.4s / 8.5s |
-| `qwen2.5:7b` | 60 | **51/60 (85.0%)** | 51/60 (85.0%) | 18/20 (90%) | 17/20 (85%) | 16/20 (80%) | 21/27 (78%) | 8.0s / 21.7s |
+| `qwen2.5:0.5b` | 60 | **17/60 (28.3%)** | 17/60 (28.3%) | 10/20 (50%) | 6/20 (30%) | 1/20 (5%) | 1/27 (4%) | 1.4s / 9.0s |
+| `qwen2.5:7b` | 60 | **51/60 (85.0%)** | 51/60 (85.0%) | 18/20 (90%) | 17/20 (85%) | 16/20 (80%) | 21/27 (78%) | 8.1s / 23.2s |
 
 ## Execution accuracy — held-out suite (written before tuning, run once)
 
 | Model | Cases | Strict | Extra columns allowed | English | Arabic | Urdu | Hard | p50 / p95 latency |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `qwen2.5:0.5b` | 24 | **0/24 (0.0%)** | 0/24 (0.0%) | 0/8 (0%) | 0/8 (0%) | 0/8 (0%) | 0/21 (0%) | 5.7s / 8.3s |
-| `qwen2.5:7b` | 24 | **16/24 (66.7%)** | 18/24 (75.0%) | 6/8 (75%) | 5/8 (62%) | 5/8 (62%) | 13/21 (62%) | 15.7s / 25.0s |
+| `qwen2.5:0.5b` | 24 | **0/24 (0.0%)** | 0/24 (0.0%) | 0/8 (0%) | 0/8 (0%) | 0/8 (0%) | 0/21 (0%) | 7.4s / 10.2s |
+| `qwen2.5:7b` | 24 | **16/24 (66.7%)** | 18/24 (75.0%) | 6/8 (75%) | 5/8 (62%) | 5/8 (62%) | 13/21 (62%) | 16.7s / 26.1s |
+
+## Execution accuracy — follow-up suite (a question that depends on the one before it)
+
+| Model | Cases | Strict | Extra columns allowed | English | Arabic | Urdu | Hard | p50 / p95 latency |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `qwen2.5:0.5b` | 24 | **3/24 (12.5%)** | 3/24 (12.5%) | 2/8 (25%) | 1/8 (12%) | 0/8 (0%) | — | 2.7s / 11.9s |
+| `qwen2.5:7b` | 24 | **19/24 (79.2%)** | 19/24 (79.2%) | 7/8 (88%) | 7/8 (88%) | 5/8 (62%) | — | 16.1s / 26.5s |
 
 ## Before and after
 
@@ -32,8 +39,8 @@ value grounding, 120 s timeout) run on today's suites and scored the same way
 
 | Suite | Model | Before (strict) | After (strict) | Before hard | After hard | Before p50 / p95 | After p50 / p95 |
 |---|---|---:|---:|---:|---:|---:|---:|
-| holdout | `qwen2.5:7b` | 7/24 (29.2%) | **16/24 (66.7%)** | 4/21 (19%) | 13/21 (62%) | 12.7s / 77.1s | 15.7s / 25.0s |
-| multilingual | `qwen2.5:7b` | 34/60 (56.7%) | **51/60 (85.0%)** | 6/27 (22%) | 21/27 (78%) | 8.3s / 26.5s | 8.0s / 21.7s |
+| holdout | `qwen2.5:7b` | 7/24 (29.2%) | **16/24 (66.7%)** | 4/21 (19%) | 13/21 (62%) | 12.7s / 77.1s | 16.7s / 26.1s |
+| multilingual | `qwen2.5:7b` | 34/60 (56.7%) | **51/60 (85.0%)** | 6/27 (22%) | 21/27 (78%) | 8.3s / 26.5s | 8.1s / 23.2s |
 
 ### `qwen2.5:0.5b` on the multilingual suite — breakdown
 
@@ -68,7 +75,7 @@ value grounding, 120 s timeout) run on today's suites and scored the same way
 | subquery | 1/3 (33%) |
 | value_set | 0/6 (0%) |
 
-**Warm-up** before the first case: 0.4s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
+**Warm-up** before the first case: 26.8s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
 
 **Repair loop:** 25 answer(s) needed at least one repair; 0 of them ended correct.
 
@@ -167,7 +174,7 @@ query returning plausible rows scores like a right one.
 | subquery | 3/3 (100%) |
 | value_set | 5/6 (83%) |
 
-**Warm-up** before the first case: 1.4s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
+**Warm-up** before the first case: 1.3s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
 
 **Repair loop:** 1 answer(s) needed at least one repair; 0 of them ended correct.
 
@@ -312,6 +319,120 @@ query returning plausible rows scores like a right one.
 | `ur_avg_items_per_order` | wrong result set |
 | `ur_top_product_qatar_revenue` | wrong result set |
 | `ur_cities_above_avg_order` ✓ | wrong result set |
+
+### `qwen2.5:0.5b` on the followup suite — breakdown
+
+**By difficulty**
+
+| difficulty | correct/n |
+|---|---:|
+
+**By tag**
+
+| tag | correct/n |
+|---|---:|
+| add_filter | 0/9 (0%) |
+| change_limit | 0/3 (0%) |
+| change_measure | 0/3 (0%) |
+| date_logic | 0/3 (0%) |
+| follow_up | 3/24 (12%) |
+| join | 0/3 (0%) |
+| multi_join | 0/3 (0%) |
+| reverse_order | 0/3 (0%) |
+| swap_value | 1/3 (33%) |
+| topic_switch | 2/3 (67%) |
+
+**Warm-up** before the first case: 0.3s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
+
+**Repair loop:** 8 answer(s) needed at least one repair; 0 of them ended correct.
+
+**Does the confidence score discriminate?**
+
+| answers | n | mean confidence |
+|---|---:|---:|
+| correct | 3 | 0.97 |
+| wrong | 21 | 0.71 |
+
+A gap here means the score carries signal — wrong answers really do
+score lower. It is still **not** a calibrated probability (see
+`DECISIONS.md` D17); with this few cases it is an observation, not a
+claim about the general case. Every signal is structural (did it parse,
+run, return rows, need a repair), so a wrong answer that is a well-formed
+query returning plausible rows scores like a right one.
+
+**Failures** (✓ = right answer with extra columns)
+
+| case | why |
+|---|---|
+| `ar_late_then_riyadh` | blocked: `unknown_column`, `unknown_column` |
+| `ar_dubai_then_riyadh` | wrong result set |
+| `ar_revenue_then_uae` | wrong result set |
+| `ar_top3_then_top5` | wrong result set |
+| `ar_status_then_2025` | blocked: `function_not_allowed` |
+| `ar_late_most_then_least` | wrong result set |
+| `ar_segment_value_then_count` | wrong result set |
+| `en_late_then_riyadh` | wrong result set |
+| `en_revenue_then_uae` | wrong result set |
+| `en_top3_then_top5` | SQLite error: no such column: p2.units (sql='SELECT p1.name_en, SUM(p2.units) AS units, SUM(p3.units) AS total FROM orde |
+| `en_status_then_2025` | blocked: `function_not_allowed` |
+| `en_late_most_then_least` | wrong result set |
+| `en_segment_value_then_count` | wrong result set |
+| `ur_late_then_riyadh` | blocked: `unknown_alias`, `unknown_alias` |
+| `ur_dubai_then_riyadh` | wrong result set |
+| `ur_revenue_then_uae` | blocked: `unknown_alias`, `unknown_column` |
+| `ur_top3_then_top5` | SQLite error: misuse of aggregate: COUNT() (sql="SELECT name_ar FROM customers WHERE city = 'Abu Dhabi' AND country = 'Q |
+| `ur_status_then_2025` | wrong result set |
+| `ur_late_most_then_least` | wrong result set |
+| `ur_topic_switch` | wrong result set |
+| `ur_segment_value_then_count` | wrong result set |
+
+### `qwen2.5:7b` on the followup suite — breakdown
+
+**By difficulty**
+
+| difficulty | correct/n |
+|---|---:|
+
+**By tag**
+
+| tag | correct/n |
+|---|---:|
+| add_filter | 6/9 (67%) |
+| change_limit | 3/3 (100%) |
+| change_measure | 1/3 (33%) |
+| date_logic | 2/3 (67%) |
+| follow_up | 19/24 (79%) |
+| join | 3/3 (100%) |
+| multi_join | 1/3 (33%) |
+| reverse_order | 3/3 (100%) |
+| swap_value | 3/3 (100%) |
+| topic_switch | 3/3 (100%) |
+
+**Warm-up** before the first case: 1.3s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
+
+**Does the confidence score discriminate?**
+
+| answers | n | mean confidence |
+|---|---:|---:|
+| correct | 19 | 0.98 |
+| wrong | 5 | 0.97 |
+
+A gap here means the score carries signal — wrong answers really do
+score lower. It is still **not** a calibrated probability (see
+`DECISIONS.md` D17); with this few cases it is an observation, not a
+claim about the general case. Every signal is structural (did it parse,
+run, return rows, need a repair), so a wrong answer that is a well-formed
+query returning plausible rows scores like a right one.
+
+**Failures** (✓ = right answer with extra columns)
+
+| case | why |
+|---|---|
+| `ar_revenue_then_uae` | wrong result set |
+| `en_segment_value_then_count` | wrong result set |
+| `ur_revenue_then_uae` | wrong result set |
+| `ur_status_then_2025` | wrong result set |
+| `ur_segment_value_then_count` | wrong result set |
 
 ## Adversarial suite
 

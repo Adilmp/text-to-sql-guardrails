@@ -81,13 +81,13 @@
     "unknown_column": 16,
     "unknown_alias": 10
   },
-  "mean_latency_ms": 4824.0,
-  "p50_latency_ms": 5669.6,
-  "p95_latency_ms": 8287.0,
-  "total_seconds": 115.8,
+  "mean_latency_ms": 6042.1,
+  "p50_latency_ms": 7419.0,
+  "p95_latency_ms": 10206.1,
+  "total_seconds": 145.0,
   "correct_relaxed": 0,
   "accuracy_relaxed": 0.0,
   "repaired": 17,
   "repaired_correct": 0,
-  "warmup_ms": 269.2
+  "warmup_ms": 277.7
 }

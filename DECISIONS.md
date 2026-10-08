@@ -47,6 +47,7 @@ Each one ends with **In short**: the decision and its reason in one line.
 | D40 | The answer cache matches only meaning-free variation, and stores SQL, not rows | Serving |
 | D41 | Answers are presented for people: a sentence from the result, a chart, CSV, suggestions | Serving |
 | D42 | Features follow research on what users of these tools need, and stay minimal | Serving |
+| D43 | Follow-ups carry the earlier exchange; clarifying questions come from a curated list | Accuracy |
 
 ---
 
@@ -805,3 +806,38 @@ eval run.
 is ambiguous. Both came up in the research and both are worth doing, but each changes what the
 model is asked, so each needs measuring through the eval and the gate, not just shipping.
 **In short:** *"Build what the research says users need, and nothing that adds a screen."*
+
+## D43: Follow-ups carry the earlier exchange; clarifying questions come from a curated list
+**Decision, follow-ups:** after an answer, the next question is sent with the earlier question
+and the model's own reply to it, as one earlier exchange in the conversation ("and in Riyadh?"
+is read against "how many orders were delivered late?"). One exchange is enough to chain: the
+earlier SQL already carries everything resolved before it. The page shows what the question
+follows up on, with one click to start afresh; the earlier exchange is looked up by answer id on
+the server, never taken from the browser. Follow-up answers are never cached, since "what about
+Riyadh?" means nothing on its own.
+**Decision, clarifying questions:** a short curated list of business terms that have two
+meanings in this data (`<db>.clarifications.json`): *fulfilled / shipped / sent* (all orders,
+or only delivered ones?) and *sales / best-selling / popular* (by revenue, units or number of
+orders?). When a question uses one and nothing in it already settles the meaning ("units"
+settles "best-selling"), the server asks back in the question's language, without calling the
+model, and adds the chosen meaning to the question as a short hint.
+**Why the clarifier is not the model:** asking a 7b model to decide when to ask would change
+every prompt, and a model told to be careful asks about everything. Across all 115 eval
+questions the curated list fires on exactly six: the two questions whose verbs ("fulfil",
+"shipped") split the model from the gold answer, in each language. Those were the root of most
+remaining Urdu misses, where the model read پورے کیے as "delivered".
+**Measured:**
+
+| | Result |
+|---|---|
+| Single questions after adding follow-up support | **byte-identical replies** for both models: 60/60 development, 24/24 held-out, 7/7 adversarial |
+| Follow-up suite (8 conversations × 3 languages, `qwen2.5:7b`) | **19/24 (79.2%)**: English 7/8, Arabic 7/8, Urdu 5/8 |
+| Topic-switch control (an unrelated earlier question) | right in all three languages |
+| Follow-up suite, `qwen2.5:0.5b` | 3/24: the small model can't use the context, as on the held-out suite (0/24) |
+
+The follow-up suite gives the earlier turn its gold query, so it measures the follow-up itself.
+The misses are the hard kind: bare fragments with no question word ("only for customers in the
+UAE") sometimes lose what was being measured, and "and how many customers are in each?" was
+merged into the earlier query instead of replacing it.
+**In short:** *"Carry the conversation without changing a single standalone answer, and ask
+only where the data really has two meanings."*
