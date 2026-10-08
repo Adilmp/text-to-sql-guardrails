@@ -41,6 +41,8 @@ first.
 | Suggestions | Offered only from the curated question list, never from cached questions | One user's questions shown to the next |
 | CSV export | Text cells starting with `= + - @` are prefixed with `'` | CSV/formula injection through stored values (customer names) |
 | Feedback | The browser sends an answer id, never SQL; the server looks its own query up | Planting a "verified" query through the feedback endpoint |
+| Follow-ups | The earlier exchange is looked up by answer id on the server; the browser never supplies it | Injecting a fabricated "earlier answer" into the model's conversation |
+| Clarifications | The browser sends an option number; only the server's own hint text reaches the model | Smuggling instructions into the question through the clarification |
 | Runtime | Read-only URI (`file:...?mode=ro`) | Writes, even with the validator bypassed |
 | Runtime | `PRAGMA query_only = ON` | Writes on a connection that opened read-write |
 | Runtime | Extension loading disabled | `load_extension` if the allowlist were bypassed |

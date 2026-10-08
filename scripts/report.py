@@ -60,6 +60,7 @@ BASELINE = RUNS / "baseline-888d867"
 ACCURACY_SUITES = {
     "multilingual": "multilingual suite (development: the pipeline was tuned on it)",
     "holdout": "held-out suite (written before tuning, run once)",
+    "followup": "follow-up suite (a question that depends on the one before it)",
     # Runs from before the suite gained Urdu and harder questions.
     "bilingual": "bilingual suite (previous version, English and Arabic only)",
 }

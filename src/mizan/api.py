@@ -33,10 +33,12 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from .cache import AnswerCache, CachedTextToSQL, CacheSettings
+from .clarify import Clarifier
 from .config import Settings
 from .errors import MizanError, ProviderError
 from .generate import TextToSQL
 from .logging import configure, get_logger, run_context
+from .nl import detect_script
 from .present import chart_spec, explain, summarize
 from .providers import build_provider
 from .questions import Suggester, curated_questions, names_from_db
@@ -47,9 +49,20 @@ logger = get_logger("api")
 WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
 
 
+class ClarificationChoice(BaseModel):
+    #: Which ambiguity the server asked about, and the option the user picked.
+    id: str = Field(..., min_length=1, max_length=64)
+    option: int = Field(..., ge=0, le=9)
+
+
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2_000)
     samples: int = Field(default=1, ge=1, le=5)
+    #: The id of the answer this question follows up on. The server looks that answer up
+    #: itself; the browser never supplies the earlier SQL.
+    follow_up_of: str | None = Field(default=None, min_length=8, max_length=64)
+    #: The user's answer to a clarifying question the server asked about this question.
+    clarification: ClarificationChoice | None = None
 
 
 class FeedbackRequest(BaseModel):
@@ -87,6 +100,13 @@ class AskResponse(BaseModel):
     answer_id: str | None = None
     #: Someone already reported exactly this query as the wrong answer to this question.
     reported: bool = False
+    #: Set instead of an answer when the question needs a choice first (clarify.py):
+    #: {"id", "ask", "options": [labels]}, in the question's language.
+    clarify: dict[str, Any] | None = None
+    #: The meaning the user chose, when the question was clarified.
+    clarified_as: str | None = None
+    #: The earlier question this one followed up on.
+    follow_up_of: str | None = None
 
 
 #: How often an idle server re-sends its warm-up. Well inside the 30-minute keep-alive, so the
@@ -113,7 +133,7 @@ def create_app(
     state: dict[str, Any] = {"warmup": "running", "last_used": time.monotonic()}
     #: Recent answers by id, so feedback names an answer instead of carrying SQL. Bounded:
     #: feedback is given right after an answer, not days later.
-    recent: OrderedDict[str, tuple[str, str]] = OrderedDict()
+    recent: OrderedDict[str, tuple[str, str, str]] = OrderedDict()
     recent_lock = threading.Lock()
     ready = threading.Event()
     stop_keep_warm = threading.Event()
@@ -152,6 +172,8 @@ def create_app(
         cache = AnswerCache(cache_settings.path) if cache_settings.enabled else None
         state["cache"] = cache
         state["served"] = CachedTextToSQL(state["engine"], cache, cache_settings)
+        # Ambiguous business terms, next to the glossary: <db>.clarifications.json.
+        state["clarifier"] = Clarifier.from_file(cfg.db_path.with_suffix(".clarifications.json"))
         state["suggester"] = Suggester(q for _, q in curated_questions(names_from_db(cfg.db_path)))
         if state["provider"].name != "mock":
             # Read the prompt into the model's cache now, in the background, so the first
@@ -240,7 +262,7 @@ def create_app(
             entry = recent.get(request.answer_id)
         if entry is None:
             raise HTTPException(status_code=404, detail="unknown or expired answer id")
-        question, sql = entry
+        question, sql, _ = entry
         served: CachedTextToSQL = state["served"]
         up = request.verdict == "up"
         served.verdict(question, sql, up)
@@ -294,8 +316,46 @@ def create_app(
     @app.post("/api/ask", response_model=AskResponse)
     def ask(request: AskRequest) -> AskResponse:
         served: CachedTextToSQL = state["served"]
+        clarifier: Clarifier = state["clarifier"]
         state["last_used"] = time.monotonic()
         hit = None
+        question, clarified_as = request.question, None
+
+        if request.clarification is not None:
+            try:
+                question, clarified_as = clarifier.apply(
+                    question, request.clarification.id, request.clarification.option
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        elif (ambiguity := clarifier.check(question)) is not None:
+            # Ask before answering: no model call, so this costs nothing.
+            script = detect_script(question)
+            return AskResponse(
+                ok=False,
+                question=question,
+                script=script.value,
+                rtl=script.is_rtl,
+                sql=None,
+                result=None,
+                confidence={"score": 0.0, "band": "low", "signals": []},
+                violations=[],
+                warnings=[],
+                error=None,
+                provider=state["provider"].name,
+                model=state["provider"].model,
+                latency_ms=0.0,
+                clarify=ambiguity.to_dict(script.prompt_language),
+            )
+
+        context: tuple[tuple[str, str], ...] = ()
+        follow_up_of = None
+        if request.follow_up_of:
+            with recent_lock:
+                earlier = recent.get(request.follow_up_of)
+            if earlier is not None:  # an expired id: answer the question on its own
+                follow_up_of, _, earlier_reply = earlier
+                context = ((follow_up_of, earlier_reply),)
 
         with run_context() as run_id:
             try:
@@ -307,9 +367,9 @@ def create_app(
                         state["provider"],
                         cfg.model_copy(update={"self_consistency_n": request.samples}),
                     )
-                    answer = engine.ask(request.question)
+                    answer = engine.ask(question, context)
                 else:
-                    answer, hit = served.ask(request.question)
+                    answer, hit = served.ask(question, context)
             except ProviderError as exc:
                 logger.error("provider failure", extra={"error": str(exc), "run_id": run_id})
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -322,7 +382,9 @@ def create_app(
         if answer.ok and answer.sql:
             answer_id = uuid.uuid4().hex
             with recent_lock:
-                recent[answer_id] = (answer.question, answer.sql)
+                # The model's own reply where there is one: a follow-up puts it back in the
+                # conversation, and identical text lets the model server reuse its cache.
+                recent[answer_id] = (answer.question, answer.sql, answer.raw_output or answer.sql)
                 while len(recent) > 500:
                     recent.popitem(last=False)
         return AskResponse(
@@ -355,7 +417,9 @@ def create_app(
             answer_id=answer_id,
             reported=bool(answer.sql)
             and hit is None
-            and served.reported(request.question, answer.sql or ""),
+            and served.reported(question, answer.sql or ""),
+            clarified_as=clarified_as,
+            follow_up_of=follow_up_of,
         )
 
     return app

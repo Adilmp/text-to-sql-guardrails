@@ -57,6 +57,9 @@ class EvalCase:
     tags: tuple[str, ...] = field(default_factory=tuple)
     #: Other gold queries whose result also counts as correct (see the module docstring).
     alt_gold_sql: tuple[str, ...] = ()
+    #: Earlier exchanges for a follow-up question: ``((question, sql), ...)``, oldest first.
+    #: Empty for the standalone suites, which are what the other numbers measure.
+    context: tuple[tuple[str, str], ...] = ()
 
     @property
     def pair_id(self) -> str:
@@ -431,6 +434,180 @@ def build_holdout() -> tuple[EvalCase, ...]:
     return _expand(_HOLDOUT)
 
 
+# ------------------------------------------------------------------------ follow-up suite
+
+
+@dataclass(frozen=True)
+class _FollowUp:
+    pair_id: str
+    #: The earlier question in each language, and the SQL that answered it.
+    first: tuple[str, str, str]
+    first_gold: str
+    #: The follow-up in each language, and its gold query.
+    then: tuple[str, str, str]
+    gold: str
+    tags: tuple[str, ...]
+
+
+_LATE = (
+    "how many orders were delivered late?",
+    "كم عدد الطلبات التي تم تسليمها متأخرة؟",
+    "کتنے آرڈر تاخیر سے ڈیلیور ہوئے؟",
+)
+_LATE_GOLD = (
+    "SELECT COUNT(*) FROM orders WHERE delivered_at IS NOT NULL AND delivered_at > promised_at"
+)
+_TOP_UNITS = (
+    "SELECT p.name_en, SUM(oi.quantity) AS units FROM order_items oi "
+    "JOIN products p ON p.product_id = oi.product_id "
+    "GROUP BY p.product_id ORDER BY units DESC LIMIT {n}"
+)
+_LATE_BY_COURIER = (
+    "SELECT c.name_en, COUNT(*) AS late_count FROM orders o "
+    "JOIN couriers c ON c.courier_id = o.courier_id "
+    "WHERE o.delivered_at IS NOT NULL AND o.delivered_at > o.promised_at "
+    "GROUP BY c.name_en ORDER BY late_count {direction} LIMIT 1"
+)
+_REVENUE_BY_CATEGORY = (
+    "SELECT p.category, SUM(oi.quantity * oi.unit_price_aed) AS revenue FROM order_items oi "
+    "JOIN products p ON p.product_id = oi.product_id GROUP BY p.category"
+)
+
+#: Follow-ups: a question that only makes sense after the one before it ("what about
+#: Riyadh?"), plus one control that changes topic, where the earlier exchange must be ignored.
+#: The earlier turn is answered with its gold query, so the suite measures the follow-up
+#: itself; in the app the earlier turn is the model's own reply.
+_FOLLOW_UPS: tuple[_FollowUp, ...] = (
+    _FollowUp(
+        "late_then_riyadh",
+        _LATE,
+        _LATE_GOLD,
+        (
+            "and how many of those went to customers in Riyadh?",
+            "وكم منها كان لعملاء في الرياض؟",
+            "اور ان میں سے کتنے ریاض کے کسٹمرز کے تھے؟",
+        ),
+        "SELECT COUNT(*) FROM orders o JOIN customers c ON c.customer_id = o.customer_id "
+        "WHERE c.city = 'Riyadh' AND o.delivered_at IS NOT NULL AND o.delivered_at > o.promised_at",
+        ("follow_up", "add_filter", "join"),
+    ),
+    _FollowUp(
+        "dubai_then_riyadh",
+        ("how many customers are in Dubai?", "كم عدد العملاء في دبي؟", "دبئی میں کتنے کسٹمرز ہیں؟"),
+        "SELECT COUNT(*) FROM customers WHERE city = 'Dubai'",
+        ("what about Riyadh?", "وماذا عن الرياض؟", "اور ریاض میں؟"),
+        "SELECT COUNT(*) FROM customers WHERE city = 'Riyadh'",
+        ("follow_up", "swap_value"),
+    ),
+    _FollowUp(
+        "revenue_then_uae",
+        (
+            "what is the total revenue for each product category?",
+            "ما إجمالي الإيرادات لكل فئة منتجات؟",
+            "ہر پروڈکٹ کیٹیگری کی کل آمدنی کتنی ہے؟",
+        ),
+        _REVENUE_BY_CATEGORY,
+        (
+            "only for customers in the UAE",
+            "فقط للعملاء في الإمارات",
+            "صرف متحدہ عرب امارات کے کسٹمرز کے لیے",
+        ),
+        "SELECT p.category, SUM(oi.quantity * oi.unit_price_aed) AS revenue FROM order_items oi "
+        "JOIN orders o ON o.order_id = oi.order_id "
+        "JOIN customers c ON c.customer_id = o.customer_id "
+        "JOIN products p ON p.product_id = oi.product_id "
+        "WHERE c.country = 'UAE' GROUP BY p.category",
+        ("follow_up", "add_filter", "multi_join"),
+    ),
+    _FollowUp(
+        "top3_then_top5",
+        (
+            "which three products sold the most units?",
+            "ما المنتجات الثلاثة الأكثر مبيعاً من حيث عدد الوحدات؟",
+            "سب سے زیادہ یونٹس میں بکنے والی تین پروڈکٹس کون سی ہیں؟",
+        ),
+        _TOP_UNITS.format(n=3),
+        ("and the top five?", "وماذا عن أعلى خمسة؟", "اور سب سے اوپر کی پانچ؟"),
+        _TOP_UNITS.format(n=5),
+        ("follow_up", "change_limit"),
+    ),
+    _FollowUp(
+        "status_then_2025",
+        (
+            "how many orders are there for each status?",
+            "كم عدد الطلبات لكل حالة؟",
+            "ہر اسٹیٹس کے کتنے آرڈر ہیں؟",
+        ),
+        "SELECT status, COUNT(*) AS n FROM orders GROUP BY status",
+        (
+            "only for orders placed in 2025",
+            "فقط للطلبات التي قُدّمت في عام ٢٠٢٥",
+            "صرف ۲۰۲۵ میں دیے گئے آرڈرز کے لیے",
+        ),
+        "SELECT status, COUNT(*) AS n FROM orders WHERE strftime('%Y', placed_at) = '2025' "
+        "GROUP BY status",
+        ("follow_up", "add_filter", "date_logic"),
+    ),
+    _FollowUp(
+        "late_most_then_least",
+        (
+            "which courier delivered late most often?",
+            "أي شركة توصيل تأخرت أكثر من غيرها؟",
+            "کس کورئیر نے سب سے زیادہ بار تاخیر سے ڈیلیوری کی؟",
+        ),
+        _LATE_BY_COURIER.format(direction="DESC"),
+        ("and which one least often?", "وأيها تأخرت أقل من غيرها؟", "اور کس نے سب سے کم بار؟"),
+        _LATE_BY_COURIER.format(direction="ASC"),
+        ("follow_up", "reverse_order"),
+    ),
+    _FollowUp(
+        "topic_switch",
+        _LATE,
+        _LATE_GOLD,
+        ("how many products are there?", "كم عدد المنتجات؟", "کتنی پروڈکٹس ہیں؟"),
+        "SELECT COUNT(*) FROM products",
+        ("follow_up", "topic_switch"),
+    ),
+    _FollowUp(
+        "segment_value_then_count",
+        (
+            "what is the average order value for each customer segment?",
+            "ما متوسط قيمة الطلب لكل فئة عملاء؟",
+            "ہر کسٹمر سیگمنٹ کے آرڈر کی اوسط مالیت کتنی ہے؟",
+        ),
+        "SELECT c.segment, AVG(o.total_aed) AS avg_value FROM orders o "
+        "JOIN customers c ON c.customer_id = o.customer_id GROUP BY c.segment",
+        (
+            "and how many customers are in each?",
+            "وكم عدد العملاء في كل منها؟",
+            "اور ہر ایک میں کتنے کسٹمرز ہیں؟",
+        ),
+        "SELECT segment, COUNT(*) AS n FROM customers GROUP BY segment",
+        ("follow_up", "change_measure"),
+    ),
+)
+
+
+def build_followups() -> tuple[EvalCase, ...]:
+    """The follow-up suite: 8 two-turn conversations, each in English, Arabic and Urdu."""
+    cases: list[EvalCase] = []
+    for f in _FOLLOW_UPS:
+        for i, language in enumerate(LANGUAGES):
+            cases.append(
+                EvalCase(
+                    id=f"{language}_{f.pair_id}",
+                    question=f.then[i],
+                    gold_sql=f.gold,
+                    language=language,
+                    gloss="" if language == "en" else f.then[0],
+                    difficulty="follow_up",
+                    tags=f.tags,
+                    context=((f.first[i], f.first_gold),),
+                )
+            )
+    return tuple(cases)
+
+
 #: Adversarial prompts. These are not accuracy tests — the model is *expected* to be talked
 #: into producing something dangerous. What is measured is whether the guardrails catch it,
 #: which is the only number in this project that must be 100%.
@@ -499,6 +676,7 @@ SUITES: dict[str, Callable[[], tuple[EvalCase, ...]]] = {
     "multilingual": build_suite,
     "holdout": build_holdout,
     "injection": injection_suite,
+    "followup": build_followups,
 }
 
 

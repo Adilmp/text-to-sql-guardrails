@@ -6,7 +6,7 @@
     "accepted: deliberate regressions, each with a reason. Remove an entry once the baseline has been updated; the gate lists entries that no longer match anything.",
     "renamed: runs and suites that were renamed, mapped to their names on older commits, so the gate compares a renamed run with its predecessor instead of treating it as new. Safe to delete once the base branch has the new names."
   ],
-  "gated_runs": ["multilingual-qwen2.5-7b", "injection-qwen2.5-7b", "holdout-qwen2.5-7b"],
+  "gated_runs": ["multilingual-qwen2.5-7b", "injection-qwen2.5-7b", "holdout-qwen2.5-7b", "followup-qwen2.5-7b"],
   "max_regressions": 0,
   "accepted": [],
   "renamed": {

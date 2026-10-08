@@ -132,6 +132,15 @@
     font-size: .85rem; }
   .topics b { display: block; }
   .topics .alias { color: var(--muted); unicode-bidi: plaintext; }
+  .thread { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap;
+    color: var(--muted); font-size: .82rem; margin: -.5rem 0 1rem; }
+  .thread q { unicode-bidi: plaintext; color: var(--ink); }
+  .thread button, .context button { background: none; border: 0; padding: 0;
+    color: var(--accent); font-size: .82rem; cursor: pointer; text-decoration: underline; }
+  .context { color: var(--muted); font-size: .82rem; margin-top: .35rem; unicode-bidi: plaintext; }
+  .choices { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .7rem; }
+  .choices button { background: transparent; color: var(--accent);
+    border: 1px solid var(--accent); padding: .45rem .8rem; font-size: .92rem; }
 </style>
 </head>
 <body>
@@ -153,6 +162,7 @@
     <button id="go" type="submit">Ask</button>
   </form>
 
+  <div class="thread hidden" id="thread"></div>
   <div class="examples" id="examples"></div>
   <button type="button" class="help-link" id="help-link">What can I ask?</button>
   <div class="card hidden" id="help"></div>
@@ -216,12 +226,32 @@ for (const ex of EXAMPLES) {
   const b = document.createElement("button");
   b.type = "button";
   b.textContent = ex;
-  b.onclick = () => { qEl.value = ex; document.getElementById("form").requestSubmit(); };
+  b.onclick = () => { clearThread(); qEl.value = ex; document.getElementById("form").requestSubmit(); };
   examplesEl.appendChild(b);
 }
 
 const esc = (s) => String(s).replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// -------------------------------------------------------------------- follow-up thread
+// After an answer, the next question is sent as a follow-up to it ("and in Riyadh?"), the
+// way people ask. The server looks the earlier answer up by id; one click starts afresh.
+const threadEl = document.getElementById("thread");
+const PLACEHOLDER = qEl.placeholder;
+let thread = null;
+function drawThread() {
+  if (!thread) {
+    threadEl.classList.add("hidden");
+    qEl.placeholder = PLACEHOLDER;
+    return;
+  }
+  threadEl.innerHTML = `↳ Your next question follows up on <q>${esc(thread.question)}</q>`
+    + `<button type="button" id="new-q">Start a new question instead</button>`;
+  threadEl.classList.remove("hidden");
+  qEl.placeholder = "Ask a follow-up (e.g. “and in Riyadh?”) or anything else…";
+  document.getElementById("new-q").onclick = () => { clearThread(); qEl.focus(); };
+}
+function clearThread() { thread = null; drawThread(); }
 
 // ---------------------------------------------------------------- suggestions as you type
 // The list comes from /api/suggest: curated questions only (never other users' questions),
@@ -247,6 +277,7 @@ function drawSuggestions() {
 function choose(i) {
   qEl.value = suggestions[i].question;
   closeSuggestions();
+  clearThread();  // suggestions are standalone questions
   document.getElementById("form").requestSubmit();
 }
 qEl.addEventListener("input", () => {
@@ -394,11 +425,15 @@ function chartSVG(result, spec) {
     + `<polyline class="line" points="${points}"/>${dots}${xLabels}</svg>`;
 }
 
-document.getElementById("form").onsubmit = async (e) => {
+document.getElementById("form").onsubmit = (e) => {
   e.preventDefault();
   closeSuggestions();
   const question = qEl.value.trim();
-  if (!question) return;
+  if (question) askQuestion(question, { follow_up_of: thread ? thread.id : undefined });
+};
+
+// `extra` carries follow_up_of and, after a clarifying question, the user's choice.
+async function askQuestion(question, extra = {}) {
 
   goEl.disabled = true;
 
@@ -428,7 +463,7 @@ document.getElementById("form").onsubmit = async (e) => {
     const res = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question })
+      body: JSON.stringify({ question, ...extra })
     });
     if (!res.ok) {
       const detail = await res.text();
@@ -436,7 +471,18 @@ document.getElementById("form").onsubmit = async (e) => {
         <div class="violation">HTTP ${res.status}</div><pre>${esc(detail)}</pre></div>`;
       return;
     }
-    render(await res.json());
+    const data = await res.json();
+    if (data.clarify) {
+      renderClarify(data, question, extra);
+    } else {
+      render(data);
+      // Only a real answer starts (or continues) a thread.
+      if (data.ok && data.answer_id) {
+        thread = { id: data.answer_id, question: data.question };
+        qEl.value = "";  // ready for the follow-up; the question stays on screen in its card
+      }
+      drawThread();
+    }
     checkHealth();  // the cached-answer count may have changed
   } catch (err) {
     out.innerHTML = `<div class="card"><h2>Network error</h2>
@@ -445,13 +491,36 @@ document.getElementById("form").onsubmit = async (e) => {
     if (tick) clearInterval(tick);
     goEl.disabled = false;
   }
-};
+}
+
+// A business term with two meanings: show the options in the question's language and ask
+// again with the choice. No model call happened, so this appears instantly.
+function renderClarify(d, question, extra) {
+  out.innerHTML = `<div class="card"><h2>Question · ${esc(LANGUAGE[d.script] || d.script)}</h2>
+    <div${d.rtl ? ' class="rtl"' : ""}>${esc(question)}</div></div>
+    <div class="card"><h2>Before I answer</h2>
+    <div class="answer" dir="auto" style="font-size:1.1rem">${esc(d.clarify.ask)}</div>
+    <div class="choices" dir="auto">${d.clarify.options.map((label, i) =>
+      `<button type="button" data-i="${i}">${esc(label)}</button>`).join("")}</div></div>`;
+  for (const b of out.querySelectorAll(".choices button")) {
+    b.onclick = () => askQuestion(question, {
+      ...extra, clarification: { id: d.clarify.id, option: Number(b.dataset.i) },
+    });
+  }
+}
 
 function render(d) {
   let html = "";
 
   html += `<div class="card"><h2>Question · ${esc(LANGUAGE[d.script] || d.script)}</h2>
-    <div${d.rtl ? ' class="rtl"' : ""}>${esc(d.question)}</div></div>`;
+    <div${d.rtl ? ' class="rtl"' : ""}>${esc(d.question)}</div>`;
+  if (d.follow_up_of) {
+    html += `<div class="context">↳ follow-up to “${esc(d.follow_up_of)}”</div>`;
+  }
+  if (d.clarified_as) {
+    html += `<div class="context">Read as: ${esc(d.clarified_as)}</div>`;
+  }
+  html += `</div>`;
 
   if (d.violations && d.violations.length) {
     html += `<div class="card"><h2>Blocked by guardrails</h2>`;
