@@ -1,0 +1,122 @@
+{
+  "model": "qwen2.5:7b",
+  "provider": "ollama",
+  "suite": "multilingual",
+  "n": 60,
+  "correct": 51,
+  "accuracy": 0.85,
+  "blocked": 0,
+  "executed": 60,
+  "by_language": {
+    "ar": {
+      "n": 20,
+      "correct": 17
+    },
+    "en": {
+      "n": 20,
+      "correct": 18
+    },
+    "ur": {
+      "n": 20,
+      "correct": 16
+    }
+  },
+  "by_difficulty": {
+    "easy": {
+      "n": 18,
+      "correct": 18
+    },
+    "medium": {
+      "n": 15,
+      "correct": 12
+    },
+    "hard": {
+      "n": 27,
+      "correct": 21
+    }
+  },
+  "by_tag": {
+    "aggregate": {
+      "n": 18,
+      "correct": 17
+    },
+    "group_by": {
+      "n": 15,
+      "correct": 13
+    },
+    "filter": {
+      "n": 21,
+      "correct": 16
+    },
+    "literal": {
+      "n": 3,
+      "correct": 3
+    },
+    "date_logic": {
+      "n": 12,
+      "correct": 10
+    },
+    "null_handling": {
+      "n": 6,
+      "correct": 6
+    },
+    "join": {
+      "n": 27,
+      "correct": 18
+    },
+    "order_by": {
+      "n": 3,
+      "correct": 3
+    },
+    "limit": {
+      "n": 3,
+      "correct": 3
+    },
+    "value_set": {
+      "n": 6,
+      "correct": 5
+    },
+    "arabic_digits": {
+      "n": 6,
+      "correct": 6
+    },
+    "boolean": {
+      "n": 3,
+      "correct": 3
+    },
+    "price_trap": {
+      "n": 6,
+      "correct": 2
+    },
+    "ratio": {
+      "n": 3,
+      "correct": 1
+    },
+    "multi_join": {
+      "n": 9,
+      "correct": 6
+    },
+    "anti_join": {
+      "n": 3,
+      "correct": 3
+    },
+    "subquery": {
+      "n": 3,
+      "correct": 3
+    },
+    "distinct": {
+      "n": 3,
+      "correct": 2
+    }
+  },
+  "rejection_rules": {},
+  "mean_latency_ms": 10697.5,
+  "p50_latency_ms": 7991.1,
+  "p95_latency_ms": 21716.1,
+  "total_seconds": 641.9,
+  "correct_relaxed": 51,
+  "accuracy_relaxed": 0.85,
+  "repaired": 1,
+  "repaired_correct": 0,
+  "warmup_ms": 1435.2
+}

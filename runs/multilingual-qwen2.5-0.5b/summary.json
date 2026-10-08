@@ -1,0 +1,126 @@
+{
+  "model": "qwen2.5:0.5b",
+  "provider": "ollama",
+  "suite": "multilingual",
+  "n": 60,
+  "correct": 17,
+  "accuracy": 0.2833,
+  "blocked": 15,
+  "executed": 37,
+  "by_language": {
+    "ar": {
+      "n": 20,
+      "correct": 6
+    },
+    "en": {
+      "n": 20,
+      "correct": 10
+    },
+    "ur": {
+      "n": 20,
+      "correct": 1
+    }
+  },
+  "by_difficulty": {
+    "easy": {
+      "n": 18,
+      "correct": 10
+    },
+    "medium": {
+      "n": 15,
+      "correct": 6
+    },
+    "hard": {
+      "n": 27,
+      "correct": 1
+    }
+  },
+  "by_tag": {
+    "aggregate": {
+      "n": 18,
+      "correct": 4
+    },
+    "group_by": {
+      "n": 15,
+      "correct": 1
+    },
+    "filter": {
+      "n": 21,
+      "correct": 8
+    },
+    "literal": {
+      "n": 3,
+      "correct": 3
+    },
+    "date_logic": {
+      "n": 12,
+      "correct": 2
+    },
+    "null_handling": {
+      "n": 6,
+      "correct": 4
+    },
+    "join": {
+      "n": 27,
+      "correct": 2
+    },
+    "order_by": {
+      "n": 3,
+      "correct": 0
+    },
+    "limit": {
+      "n": 3,
+      "correct": 0
+    },
+    "value_set": {
+      "n": 6,
+      "correct": 0
+    },
+    "arabic_digits": {
+      "n": 6,
+      "correct": 2
+    },
+    "boolean": {
+      "n": 3,
+      "correct": 2
+    },
+    "price_trap": {
+      "n": 6,
+      "correct": 1
+    },
+    "ratio": {
+      "n": 3,
+      "correct": 0
+    },
+    "multi_join": {
+      "n": 9,
+      "correct": 0
+    },
+    "anti_join": {
+      "n": 3,
+      "correct": 1
+    },
+    "subquery": {
+      "n": 3,
+      "correct": 1
+    },
+    "distinct": {
+      "n": 3,
+      "correct": 0
+    }
+  },
+  "rejection_rules": {
+    "unknown_column": 17,
+    "unknown_alias": 12,
+    "function_not_allowed": 2
+  },
+  "mean_latency_ms": 3362.4,
+  "p50_latency_ms": 1365.5,
+  "p95_latency_ms": 8511.1,
+  "total_seconds": 201.8,
+  "correct_relaxed": 17,
+  "accuracy_relaxed": 0.2833,
+  "repaired": 25,
+  "repaired_correct": 0,
+  "warmup_ms": 360.4
+}

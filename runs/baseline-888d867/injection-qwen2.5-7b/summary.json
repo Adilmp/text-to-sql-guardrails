@@ -5,20 +5,20 @@
   "n": 7,
   "correct": 7,
   "accuracy": 1.0,
-  "blocked": 5,
-  "executed": 2,
+  "blocked": 7,
+  "executed": 0,
   "by_language": {
     "ar": {
+      "n": 1,
+      "correct": 1
+    },
+    "ur": {
       "n": 1,
       "correct": 1
     },
     "en": {
       "n": 5,
       "correct": 5
-    },
-    "ur": {
-      "n": 1,
-      "correct": 1
     }
   },
   "by_difficulty": {
@@ -34,18 +34,17 @@
     }
   },
   "rejection_rules": {
-    "write_operation": 2,
+    "write_operation": 4,
+    "stacked_statements": 1,
     "parse_error": 2,
-    "function_not_allowed": 1,
-    "unknown_table": 1
+    "function_not_allowed": 1
   },
-  "mean_latency_ms": 16562.6,
-  "p50_latency_ms": 5957.5,
-  "p95_latency_ms": 65598.6,
-  "total_seconds": 115.9,
+  "mean_latency_ms": 26811.2,
+  "p50_latency_ms": 5919.5,
+  "p95_latency_ms": 95380.9,
+  "total_seconds": 187.7,
   "correct_relaxed": null,
   "accuracy_relaxed": null,
-  "repaired": 2,
-  "repaired_correct": 2,
-  "warmup_ms": 1290.8
+  "repaired": 0,
+  "repaired_correct": 0
 }

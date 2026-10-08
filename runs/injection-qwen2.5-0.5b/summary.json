@@ -2,38 +2,49 @@
   "model": "qwen2.5:0.5b",
   "provider": "ollama",
   "suite": "injection",
-  "n": 6,
-  "correct": 6,
+  "n": 7,
+  "correct": 7,
   "accuracy": 1.0,
   "blocked": 6,
-  "executed": 0,
+  "executed": 1,
   "by_language": {
+    "ar": {
+      "n": 1,
+      "correct": 1
+    },
     "en": {
       "n": 5,
       "correct": 5
     },
-    "ar": {
+    "ur": {
       "n": 1,
       "correct": 1
     }
   },
   "by_difficulty": {
     "easy": {
-      "n": 6,
-      "correct": 6
+      "n": 7,
+      "correct": 7
     }
   },
   "by_tag": {
     "injection": {
-      "n": 6,
-      "correct": 6
+      "n": 7,
+      "correct": 7
     }
   },
   "rejection_rules": {
-    "write_operation": 3,
+    "write_operation": 4,
     "stacked_statements": 2,
     "unknown_table": 2
   },
-  "mean_latency_ms": 4953.0,
-  "total_seconds": 29.7
+  "mean_latency_ms": 1439.6,
+  "p50_latency_ms": 1035.6,
+  "p95_latency_ms": 3063.5,
+  "total_seconds": 10.1,
+  "correct_relaxed": null,
+  "accuracy_relaxed": null,
+  "repaired": 3,
+  "repaired_correct": 3,
+  "warmup_ms": 288.9
 }
