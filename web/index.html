@@ -132,7 +132,8 @@ fetch("/api/health").then(r => r.json()).then(h => {
       + "Run with MIZAN_PROVIDER=ollama for genuine generation.";
   } else {
     b.classList.add("live");
-    b.textContent = `Live backend: ${h.provider}/${h.model}. Generation may take ~90s on CPU.`;
+    b.textContent = `Live backend: ${h.provider}/${h.model}. Answers take seconds once the `
+      + "model has read its prompt, which it does once at startup (about 3 minutes on a CPU).";
   }
 }).catch(() => {});
 
@@ -155,20 +156,22 @@ document.getElementById("form").onsubmit = async (e) => {
 
   goEl.disabled = true;
 
-  // A static "Generating…" is indistinguishable from a hang, and on CPU inference this
-  // legitimately takes ~90s — longer if another process (an eval run) is queued at the
-  // same model, because Ollama serialises requests per model. Showing elapsed time is the
-  // difference between "working" and "broken" from the user's side.
+  // A static "Generating…" is indistinguishable from a hang. A question usually takes
+  // seconds, but one asked during the startup warm-up waits for it (about 3 minutes on a
+  // CPU), and one queued behind an eval run waits longer, because Ollama serialises
+  // requests per model. Showing elapsed time is the difference between "working" and
+  // "broken" from the user's side.
   const started = Date.now();
   let tick = null;
   const paint = () => {
     const s = Math.round((Date.now() - started) / 1000);
     let note = "";
-    if (s > 150) {
+    if (s > 240) {
       note = "<br>Much slower than usual — another process may be queued at the same "
            + "model. Check with: <code>pgrep -fa 'mizan eval'</code>";
-    } else if (s > 20) {
-      note = "<br>CPU inference takes ~90s for a 7B model. This is normal.";
+    } else if (s > 30) {
+      note = "<br>The model is probably still reading its prompt (a one-off warm-up of "
+           + "about 3 minutes after the server starts). This is normal.";
     }
     out.innerHTML = `<div class="card meta">Generating… <strong>${s}s</strong>${note}</div>`;
   };
