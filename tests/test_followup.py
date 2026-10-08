@@ -131,7 +131,7 @@ class TestClarifier:
 
     def test_the_choice_becomes_a_hint_and_its_label_is_in_the_question_s_language(self) -> None:
         question, label = self.clarifier.apply("کتنے آرڈر بھیجے گئے؟", "fulfilled", 1)
-        assert question.endswith("(count only orders that were delivered)")
+        assert question.endswith("(count only orders with status 'delivered')")
         assert label == "صرف ڈیلیور شدہ آرڈر"
         with pytest.raises(ValueError):
             self.clarifier.apply("x", "fulfilled", 7)
@@ -215,7 +215,9 @@ class TestApi:
             json={"question": question, "clarification": {"id": "fulfilled", "option": 0}},
         ).json()
         assert data["ok"] and data["clarified_as"] == "All orders, whatever their status"
-        assert data["question"].endswith("(count all orders, whatever their status)")
+        assert data["question"].endswith(
+            "(count every order whatever its status: do not filter on status)"
+        )
         bad = client.post(
             "/api/ask",
             json={"question": question, "clarification": {"id": "fulfilled", "option": 5}},

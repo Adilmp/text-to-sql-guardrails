@@ -835,6 +835,13 @@ remaining Urdu misses, where the model read پورے کیے as "delivered".
 | Topic-switch control (an unrelated earlier question) | right in all three languages |
 | Follow-up suite, `qwen2.5:0.5b` | 3/24: the small model can't use the context, as on the held-out suite (0/24) |
 
+**Found by trying it live:** the first hints described the meaning ("count all orders, whatever
+their status"), and for the Urdu question the model still wrote `WHERE status = 'delivered'`: the
+Urdu verb outweighed an English phrase in parentheses. (The "How:" line showed it at once:
+اسٹیٹس = 'delivered'.) Hints now say what to do in the query ("do not filter on status",
+"the sum of quantity times the price charged on each order line"). With those, `qwen2.5:7b`
+followed the chosen meaning in 15 of 15 tries: both *fulfilled* options and all three *sales*
+options, in English, Arabic and Urdu.
 The follow-up suite gives the earlier turn its gold query, so it measures the follow-up itself.
 The misses are the hard kind: bare fragments with no question word ("only for customers in the
 UAE") sometimes lose what was being measured, and "and how many customers are in each?" was
