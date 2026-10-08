@@ -52,6 +52,7 @@ import re
 import sqlite3
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -310,13 +311,23 @@ class CachedTextToSQL:
         self.settings = settings
         self.context = cache_context(engine)
 
-    def ask(self, question: str) -> tuple[Answer, CacheHit | None]:
+    def ask(
+        self, question: str, context: Sequence[tuple[str, str]] = ()
+    ) -> tuple[Answer, CacheHit | None]:
+        """Answer from the cache when the question is a known one, else ask the model.
+
+        A follow-up ("what about Riyadh?") only means something after the question before
+        it, so its answer is never stored. It is still served from the cache when its words
+        are exactly a known standalone question ("how many products are there?").
+        """
         key = canonical_question(question)
         if self.cache is None or not key:
-            return self.engine.ask(question), None
+            return self.engine.ask(question, context), None
         if (served := self._from_cache(question, key)) is not None:
             return served
-        answer = self.engine.ask(question)
+        answer = self.engine.ask(question, context)
+        if context:
+            return answer, None
         if answer.sql is not None and cacheable(answer, self.settings.min_confidence):
             self.cache.put(self.context, key, question, answer.sql, answer.confidence.score)
         return answer, None

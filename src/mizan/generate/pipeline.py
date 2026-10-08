@@ -20,6 +20,15 @@ Queries that tried something dangerous are never repaired. A question that is an
 correctly first time costs exactly what it did before; only broken answers pay for a
 second generation.
 
+Follow-up questions
+-------------------
+``ask(question, context=[(previous_question, previous_reply)])`` puts the earlier exchange in
+the conversation before the new question, so "and in Riyadh?" is read against what was asked
+before. With no context the request is byte-for-byte the single-question request, which is
+what the eval measures, and the follow-up suite measures the rest (DECISIONS.md D43). The
+earlier reply is the model's own text where there is one, so the processed prompt it left in
+the model server's cache matches and only the new question is read.
+
 Self-consistency
 ----------------
 When ``self_consistency_n > 1`` the model is sampled several times and the candidates are
@@ -33,6 +42,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -186,8 +196,12 @@ class TextToSQL:
         logger.info("warm-up done", extra={"elapsed_ms": round(elapsed)})
         return elapsed
 
-    def ask(self, question: str) -> Answer:
-        """Answer one natural-language question."""
+    def ask(self, question: str, context: Sequence[tuple[str, str]] = ()) -> Answer:
+        """Answer one natural-language question.
+
+        ``context`` holds earlier exchanges of the same conversation, oldest first, as
+        ``(question, the SQL that answered it)``. Empty for a standalone question.
+        """
         started = time.perf_counter()
         script = detect_script(question)
         cleaned = clean_for_model(question)
@@ -197,6 +211,12 @@ class TextToSQL:
 
         system = self.system_prompt
         user = build_user_prompt(cleaned)
+        prior: list[Turn] = []
+        for earlier_question, earlier_reply in context:
+            prior += [
+                ("user", build_user_prompt(clean_for_model(earlier_question))),
+                ("assistant", earlier_reply),
+            ]
 
         logger.info(
             "question received",
@@ -204,7 +224,7 @@ class TextToSQL:
         )
 
         try:
-            candidates = self._sample(system, user)
+            candidates = self._sample(system, user, prior)
         except ProviderError as exc:
             return self._failed(question, cleaned, script, started, str(exc), code=exc.code)
 
@@ -214,7 +234,7 @@ class TextToSQL:
         chosen, agreement = self._choose(candidates)
         rules_seen = [rule for c in candidates for rule in c.guardrail.rules_fired]
         try:
-            chosen, attempts = self._repair(system, user, chosen)
+            chosen, attempts = self._repair(system, user, chosen, prior)
         except ProviderError as exc:
             # The model server failed mid-repair. The first answer still stands; report it
             # rather than throwing away a query that was (at worst) imperfect.
@@ -296,7 +316,7 @@ class TextToSQL:
         candidate.grounding = check_values(report.sql, self.catalog, self.settings.db_path)
         return candidate
 
-    def _sample(self, system: str, user: str) -> list[Candidate]:
+    def _sample(self, system: str, user: str, prior: Sequence[Turn] = ()) -> list[Candidate]:
         """Generate, extract, validate and execute each sample."""
         candidates: list[Candidate] = []
         n = self.settings.self_consistency_n
@@ -309,6 +329,7 @@ class TextToSQL:
             completion = self.provider.generate(
                 system,
                 user,
+                history=prior,
                 temperature=temperature,
                 max_tokens=self.settings.max_output_tokens,
             )
@@ -316,7 +337,7 @@ class TextToSQL:
         return candidates
 
     def _repair(
-        self, system: str, user: str, chosen: Candidate
+        self, system: str, user: str, chosen: Candidate, prior: Sequence[Turn] = ()
     ) -> tuple[Candidate, list[Candidate]]:
         """Show the model what is wrong with its query, up to ``max_repairs`` times.
 
@@ -327,7 +348,7 @@ class TextToSQL:
         """
         attempts: list[Candidate] = []
         best, current = chosen, chosen
-        history: list[Turn] = [("user", user), ("assistant", chosen.raw_text)]
+        history: list[Turn] = [*prior, ("user", user), ("assistant", chosen.raw_text)]
         for _ in range(self.settings.max_repairs):
             problem: Problem | None = diagnose(
                 current.guardrail, current.error, current.grounding, self.catalog, current.raw_text

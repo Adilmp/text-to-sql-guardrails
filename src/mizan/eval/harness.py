@@ -204,7 +204,7 @@ def run_suite(
 def _run_case(engine: TextToSQL, case: EvalCase, settings: Settings) -> CaseOutcome:
     """Evaluate one case. Never raises — a crash here would lose the whole run."""
     try:
-        answer = engine.ask(case.question)
+        answer = engine.ask(case.question, case.context)
     except MizanError as exc:  # pragma: no cover - provider errors are handled inside ask()
         return CaseOutcome(
             case_id=case.id,

@@ -1,0 +1,65 @@
+{
+  "_comment": "Business terms with more than one reasonable meaning. When a question uses one (and nothing in it already settles the meaning), the server asks back with these options instead of letting the model guess. The chosen option's hint is added to the question, in English, for the model. Matched after normalize_for_matching(); Arabic-script terms and Latin terms of five letters or more also match as the start of a longer word (نفذ -> نفذها, fulfil -> fulfilled). See DECISIONS.md D43.",
+  "ambiguities": [
+    {
+      "id": "fulfilled",
+      "terms": {
+        "en": ["fulfil", "shipped", "dispatched", "sent"],
+        "ar": ["نفذ", "شحنت", "أرسلت"],
+        "ur": ["پورے کیے", "بھیجے", "بھیجا", "شپ کیے"]
+      },
+      "unless": {
+        "en": ["deliver", "status", "all orders", "whatever"],
+        "ar": ["تسليم", "مسلم", "الحالة", "كل الطلبات"],
+        "ur": ["ڈیلیور", "اسٹیٹس", "تمام آرڈر"]
+      },
+      "ask": {
+        "en": "Which orders should count?",
+        "ar": "أي الطلبات تُحسب؟",
+        "ur": "کون سے آرڈر گنے جائیں؟"
+      },
+      "options": [
+        {
+          "label": {"en": "All orders, whatever their status", "ar": "كل الطلبات مهما كانت حالتها", "ur": "تمام آرڈر، چاہے ان کا اسٹیٹس کچھ بھی ہو"},
+          "hint": "count all orders, whatever their status"
+        },
+        {
+          "label": {"en": "Only orders that were delivered", "ar": "الطلبات المسلّمة فقط", "ur": "صرف ڈیلیور شدہ آرڈر"},
+          "hint": "count only orders that were delivered"
+        }
+      ]
+    },
+    {
+      "id": "sales",
+      "terms": {
+        "en": ["sales", "best selling", "best-selling", "top selling", "top-selling", "bestseller", "best seller", "most popular"],
+        "ar": ["المبيعات", "الأكثر مبيعا", "الأكثر شعبية"],
+        "ur": ["سیلز", "سب سے زیادہ بکنے", "سب سے زیادہ فروخت", "مقبول"]
+      },
+      "unless": {
+        "en": ["revenue", "unit", "quantity", "aed", "number of orders", "how many orders"],
+        "ar": ["الإيرادات", "الوحدات", "وحدة", "الكمية", "درهم", "عدد الطلبات"],
+        "ur": ["آمدنی", "یونٹ", "مقدار", "درہم", "آرڈرز کی تعداد"]
+      },
+      "ask": {
+        "en": "Measure sales by what?",
+        "ar": "كيف نقيس المبيعات؟",
+        "ur": "سیلز کو کس لحاظ سے ناپیں؟"
+      },
+      "options": [
+        {
+          "label": {"en": "Revenue (AED)", "ar": "الإيرادات (درهم)", "ur": "آمدنی (درہم)"},
+          "hint": "measured by revenue, the prices actually charged"
+        },
+        {
+          "label": {"en": "Units sold", "ar": "عدد الوحدات المباعة", "ur": "فروخت شدہ یونٹس"},
+          "hint": "measured by the number of units sold"
+        },
+        {
+          "label": {"en": "Number of orders", "ar": "عدد الطلبات", "ur": "آرڈرز کی تعداد"},
+          "hint": "measured by the number of orders"
+        }
+      ]
+    }
+  ]
+}

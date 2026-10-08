@@ -57,7 +57,7 @@ from mizan.eval.gate import (  # noqa: E402
 RUNS = REPO_ROOT / "runs"
 CANDIDATES = REPO_ROOT / ".gate"
 RUN_FILES = ("config.json", "outcomes.jsonl", "summary.json")
-SUITES = ("multilingual", "injection", "holdout")
+SUITES = ("multilingual", "injection", "holdout", "followup")
 #: What `run` evaluates unless told otherwise. The held-out suite is run on purpose, not by
 #: habit (DECISIONS.md D31).
 DEFAULT_SUITES = ("multilingual", "injection")
