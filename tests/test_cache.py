@@ -189,66 +189,51 @@ class TestApi:
         assert sampled["cache"] is None
 
 
-class TestServingSettings:
-    def test_the_server_keeps_ollama_loaded_with_a_duration_ollama_accepts(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Regression: "-1" was sent as a string and Ollama answered HTTP 400 ("missing
-        unit in duration"), failing the warm-up and every question."""
-        import re
+class TestKeepWarm:
+    def test_the_keep_warm_interval_is_inside_ollama_s_keep_alive(self) -> None:
+        """A ping every N seconds only keeps the model loaded if N < the keep-alive."""
+        from mizan.api import KEEP_WARM_EVERY_S
 
-        from mizan.api import serving_settings
+        keep_alive = Settings.from_env().ollama_keep_alive
+        assert keep_alive.endswith("m")
+        assert int(keep_alive[:-1]) * 60 > KEEP_WARM_EVERY_S
 
-        monkeypatch.delenv("MIZAN_OLLAMA_KEEP_ALIVE", raising=False)
-        cfg = serving_settings(Settings.from_env(provider="ollama"))
-        assert re.fullmatch(r"-?\d+(ns|us|ms|s|m|h)", cfg.ollama_keep_alive)
-        assert cfg.ollama_keep_alive.startswith("-")
-
-    def test_an_explicit_keep_alive_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from mizan.api import serving_settings
-
-        monkeypatch.setenv("MIZAN_OLLAMA_KEEP_ALIVE", "10m")
-        cfg = serving_settings(Settings.from_env(provider="ollama"))
-        assert cfg.ollama_keep_alive == "10m"
+    def test_no_bare_keep_alive_requests(self) -> None:
+        """Regression: a keep-alive request without the loaded context size made Ollama
+        reload the model and drop the processed prompt. The server must only talk to the
+        model through the provider."""
+        source = (Path(__file__).resolve().parent.parent / "src/mizan/api.py").read_text(
+            encoding="utf-8"
+        )
+        assert "/api/generate" not in source and "httpx" not in source
 
 
 class TestPrefill:
-    """scripts/prefill_cache.py: which questions get asked ahead of time."""
-
-    @staticmethod
-    def _script():  # type: ignore[no-untyped-def]
-        import importlib.util
-
-        path = Path(__file__).resolve().parent.parent / "scripts" / "prefill_cache.py"
-        spec = importlib.util.spec_from_file_location("prefill_cache", path)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+    """The curated question list behind pre-filling and suggestions (mizan/questions.py)."""
 
     def test_every_language_every_value_and_no_repeats(self) -> None:
-        script = self._script()
+        from mizan.questions import EXAMPLES, curated_questions
+
         names = {
             "couriers": [("Gulf Express", "الخليج السريع")],
             "warehouses": [("Dubai Hub", "مستودع دبي")],
             "products": [("Prayer Rug", "سجادة صلاة")],
         }
-        questions = script.all_questions(names)
-        texts = [q for _, q in questions]
+        texts = [q for _, q in curated_questions(names)]
         keys = [canonical_question(q) for q in texts]
         assert len(keys) == len(set(keys))  # no question is asked twice
-        assert texts[: len(script.EXAMPLES)] == list(script.EXAMPLES)  # most likely first
+        assert texts[: len(EXAMPLES)] == list(EXAMPLES)  # most likely first
         assert "how many customers are in Riyadh?" in texts
         assert "كم عدد العملاء في الرياض؟" in texts
         assert "ریاض میں کتنے کسٹمرز ہیں؟" in texts
         assert "how many orders did Gulf Express deliver late?" in texts
 
     def test_gold_answers_are_never_planted(self) -> None:
-        """The script asks the model; it must not touch the eval suites' gold SQL."""
-        source = (
-            Path(__file__).resolve().parent.parent / "scripts" / "prefill_cache.py"
-        ).read_text(encoding="utf-8")
-        assert "gold_sql" not in source and "gold_queries" not in source
+        """Pre-filling asks the model; nothing on that path touches the eval's gold SQL."""
+        root = Path(__file__).resolve().parent.parent
+        for path in (root / "scripts" / "prefill_cache.py", root / "src/mizan/questions.py"):
+            source = path.read_text(encoding="utf-8")
+            assert "gold_sql" not in source and "gold_queries" not in source
 
     def test_has_does_not_count_a_hit(self, tmp_path: Path) -> None:
         cache = AnswerCache(tmp_path / "c.sqlite")
