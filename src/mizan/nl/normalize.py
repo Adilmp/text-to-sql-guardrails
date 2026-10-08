@@ -32,6 +32,16 @@ because copying Arabic out of a browser, a PDF or a spreadsheet frequently embed
 marks. Any equality check, dictionary lookup or cache key that skips this step will fail
 intermittently in a way that is invisible in a terminal and nearly impossible to eyeball.
 Stripping them is the first thing both functions do.
+
+Urdu
+----
+Urdu is written in the Arabic script with extra letters, and Pakistani keyboards produce
+different code points for letters that look the same as Arabic ones: keheh ``ک`` (U+06A9)
+for kaf ``ك``, Farsi yeh ``ی`` (U+06CC) for ``ي``, heh goal ``ہ`` (U+06C1) for ``ه``.
+``clean_for_model`` leaves all of them alone (they are the correct letters for Urdu).
+``normalize_for_matching`` folds them onto the Arabic letters, following Lucene's
+``PersianNormalizer`` for the letters it covers and extending it to yeh barree ``ے`` and
+do-chashmi heh ``ھ``, so a glossary alias matches whichever keyboard typed it.
 """
 
 from __future__ import annotations
@@ -103,6 +113,7 @@ _PUNCT_MAP = {
     ord("٪"): "%",  # ARABIC PERCENT SIGN
     ord("٫"): ".",  # ARABIC DECIMAL SEPARATOR
     ord("٬"): ",",  # ARABIC THOUSANDS SEPARATOR
+    ord("۔"): ".",  # ARABIC FULL STOP (U+06D4), the Urdu sentence end
     ord("‐"): "-",  # HYPHEN
     ord("–"): "-",  # EN DASH
     ord("—"): "-",  # EM DASH
@@ -120,7 +131,28 @@ _LETTER_FOLD_MAP = {
     ord("ٱ"): "ا",  # ٱ ALEF WASLA           -> ا
     ord("ى"): "ي",  # ى ALEF MAKSURA         -> ي
     ord("ة"): "ه",  # ة TEH MARBUTA          -> ه
+    # Urdu and Persian letters onto their Arabic counterparts (Lucene PersianNormalizer,
+    # extended to yeh barree and do-chashmi heh, which Urdu uses and Persian doesn't).
+    ord("ی"): "ي",  # ی FARSI YEH            -> ي
+    ord("ے"): "ي",  # ے YEH BARREE           -> ي
+    ord("ۓ"): "ي",  # ۓ YEH BARREE + HAMZA   -> ي
+    ord("ک"): "ك",  # ک KEHEH                -> ك
+    ord("ہ"): "ه",  # ہ HEH GOAL             -> ه
+    ord("ۂ"): "ه",  # ۂ HEH GOAL + HAMZA     -> ه
+    ord("ۃ"): "ه",  # ۃ TEH MARBUTA GOAL     -> ه
+    ord("ھ"): "ه",  # ھ HEH DOACHASHMEE      -> ه
+    ord("ە"): "ه",  # ە AE                   -> ه
 }
+
+#: Letters that occur in Urdu but not in Arabic: tteh, ddal, rreh, noon ghunna, yeh barree,
+#: heh goal, do-chashmi heh, teh marbuta goal. One of them is near-proof the text is Urdu.
+URDU_LETTERS = frozenset("ٹڈڑںےۓہۂھۃ")
+#: Letters Urdu shares with Persian but Arabic doesn't use (peh, tcheh, jeh, keheh, gaf,
+#: Farsi yeh). Weaker evidence: Gulf Arabic sometimes borrows ``چ`` and ``گ``.
+PERSO_URDU_LETTERS = frozenset("پچژکگی")
+#: Letters Arabic uses where Urdu uses its own forms: teh marbuta, Arabic yeh, kaf, alef
+#: maksura, heh.
+ARABIC_ONLY_LETTERS = frozenset("ةيكىه")
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -216,3 +248,18 @@ def arabic_ratio(text: str) -> float:
     latin = len(_LATIN_CHAR_RE.findall(text))
     total = arabic + latin
     return 0.0 if total == 0 else arabic / total
+
+
+def urdu_score(text: str) -> int:
+    """Evidence that Arabic-script ``text`` is Urdu rather than Arabic (positive = Urdu).
+
+    Counts letters: Urdu-only letters count double, letters Urdu shares with Persian count
+    once, letters only Arabic uses count against. Function words decide it in practice:
+    almost every Urdu sentence has ``کے``, ``ہے``, ``میں`` or ``کی``, and almost every Arabic
+    one has ``ي``, ``ك`` or ``ة``.
+    """
+    urdu = sum(
+        2 if c in URDU_LETTERS else 1 for c in text if c in URDU_LETTERS or c in PERSO_URDU_LETTERS
+    )
+    arabic = sum(1 for c in text if c in ARABIC_ONLY_LETTERS)
+    return urdu - arabic

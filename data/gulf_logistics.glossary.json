@@ -1,78 +1,90 @@
 {
-  "_comment": "Curated bilingual metadata layered on top of SQLite introspection. Arabic aliases are matched after normalize_for_matching(), so diacritics and letter variants do not need to be enumerated here. Keep column keys exactly as spelled in the database.",
+  "_comment": "Curated multilingual metadata layered on top of SQLite introspection. Arabic (ar) and Urdu (ur) aliases are matched after normalize_for_matching(), so diacritics, letter variants and Urdu/Arabic keyboard differences do not need to be enumerated here. Keep column keys exactly as spelled in the database.",
+  "definitions": [
+    { "term": "revenue / sales", "ar": ["الإيرادات", "المبيعات"], "ur": ["آمدنی", "سیلز", "فروخت"], "sql": "SUM(order_items.quantity * order_items.unit_price_aed)", "note": "the price actually charged on each line; products.unit_price_aed is the catalogue list price, used only when the question asks about the catalogue or list price" },
+    { "term": "order value / order total", "ar": ["قيمة الطلب"], "ur": ["آرڈر کی مالیت", "آرڈر کی رقم"], "sql": "orders.total_aed", "note": "already equals the sum of the order's lines" },
+    { "term": "late order", "ar": ["طلب متأخر", "تأخر"], "ur": ["تاخیر"], "sql": "orders.delivered_at IS NOT NULL AND orders.delivered_at > orders.promised_at", "note": "an order that has not been delivered is neither late nor on time" },
+    { "term": "delivered order", "ar": ["طلب مسلّم"], "ur": ["ڈیلیور شدہ آرڈر"], "sql": "orders.delivered_at IS NOT NULL", "note": "returned orders have no delivered_at" }
+  ],
   "tables": {
     "customers": {
       "description": "One row per customer account",
       "ar": ["العملاء", "الزبائن", "عميل", "زبون"],
+      "ur": ["کسٹمرز", "کسٹمر", "گاہک", "صارفین"],
       "columns": {
-        "customer_id": { "description": "Primary key", "ar": ["رقم العميل", "معرف العميل"] },
-        "name_en": { "description": "Customer name in English", "ar": ["اسم العميل"] },
-        "name_ar": { "description": "Customer name in Arabic", "ar": ["الاسم بالعربية"] },
-        "city": { "description": "City the customer is based in", "ar": ["المدينة", "مدينة"] },
-        "country": { "description": "Country the customer is based in", "ar": ["الدولة", "البلد"] },
-        "segment": { "description": "Commercial segment", "ar": ["الشريحة", "الفئة"] },
-        "signed_up_on": { "description": "Date the account was created (YYYY-MM-DD)", "ar": ["تاريخ التسجيل", "تاريخ الاشتراك"] }
+        "customer_id": { "description": "Primary key", "ar": ["رقم العميل", "معرف العميل"], "ur": ["کسٹمر آئی ڈی"] },
+        "name_en": { "description": "Customer name in English", "ar": ["اسم العميل"], "ur": ["کسٹمر کا نام"] },
+        "name_ar": { "description": "Customer name in Arabic", "ar": ["الاسم بالعربية"], "ur": ["عربی نام"] },
+        "city": { "description": "City the customer is based in", "ar": ["المدينة", "مدينة"], "ur": ["شہر"] },
+        "country": { "description": "Country the customer is based in", "ar": ["الدولة", "البلد"], "ur": ["ملک"] },
+        "segment": { "description": "Commercial segment", "ar": ["الشريحة", "الفئة"], "ur": ["سیگمنٹ", "طبقہ"] },
+        "signed_up_on": { "description": "Date the account was created (YYYY-MM-DD)", "ar": ["تاريخ التسجيل", "تاريخ الاشتراك"], "ur": ["سائن اپ کی تاریخ", "رجسٹریشن کی تاریخ"] }
       }
     },
     "orders": {
       "description": "One row per order. An order is late when delivered_at > promised_at",
       "ar": ["الطلبات", "الطلبيات", "طلب", "الشحنات"],
+      "ur": ["آرڈرز", "آرڈر", "شپمنٹس"],
       "columns": {
-        "order_id": { "description": "Primary key", "ar": ["رقم الطلب", "معرف الطلب"] },
-        "customer_id": { "description": "Which customer placed it", "ar": ["رقم العميل"] },
-        "warehouse_id": { "description": "Fulfilling warehouse", "ar": ["رقم المستودع"] },
-        "courier_id": { "description": "Delivering courier", "ar": ["رقم الناقل", "شركة التوصيل"] },
-        "placed_at": { "description": "When the order was placed (YYYY-MM-DD HH:MM:SS)", "ar": ["تاريخ الطلب", "وقت الطلب"] },
-        "promised_at": { "description": "Delivery date promised to the customer", "ar": ["التاريخ الموعود", "موعد التسليم"] },
-        "delivered_at": { "description": "Actual delivery timestamp, NULL if not yet delivered", "ar": ["تاريخ التسليم", "وقت التسليم الفعلي"] },
-        "status": { "description": "Lifecycle state", "ar": ["الحالة", "حالة الطلب"] },
-        "total_aed": { "description": "Order total in AED", "ar": ["الإجمالي", "المبلغ", "القيمة", "درهم"] }
+        "order_id": { "description": "Primary key", "ar": ["رقم الطلب", "معرف الطلب"], "ur": ["آرڈر نمبر", "آرڈر آئی ڈی"] },
+        "customer_id": { "description": "Which customer placed it", "ar": ["رقم العميل"], "ur": ["کسٹمر آئی ڈی"] },
+        "warehouse_id": { "description": "Fulfilling warehouse", "ar": ["رقم المستودع"], "ur": ["گودام آئی ڈی"] },
+        "courier_id": { "description": "Delivering courier", "ar": ["رقم الناقل", "شركة التوصيل"], "ur": ["کورئیر آئی ڈی"] },
+        "placed_at": { "description": "When the order was placed (YYYY-MM-DD HH:MM:SS)", "ar": ["تاريخ الطلب", "وقت الطلب"], "ur": ["آرڈر کی تاریخ", "آرڈر دینے کا وقت"] },
+        "promised_at": { "description": "Delivery date promised to the customer", "ar": ["التاريخ الموعود", "موعد التسليم"], "ur": ["وعدہ شدہ تاریخ", "ڈیلیوری کی مقررہ تاریخ"] },
+        "delivered_at": { "description": "Actual delivery timestamp, NULL if not yet delivered", "ar": ["تاريخ التسليم", "وقت التسليم الفعلي"], "ur": ["ڈیلیوری کی تاریخ", "ڈیلیور ہونے کا وقت"] },
+        "status": { "description": "Lifecycle state", "ar": ["الحالة", "حالة الطلب"], "ur": ["اسٹیٹس", "حالت"] },
+        "total_aed": { "description": "Order total in AED", "ar": ["الإجمالي", "المبلغ", "القيمة", "درهم"], "ur": ["کل رقم", "مالیت", "درہم"] }
       }
     },
     "order_items": {
       "description": "Line items. unit_price_aed here is the price actually charged, which may differ from the catalogue price in products",
       "ar": ["بنود الطلب", "تفاصيل الطلب", "الأصناف"],
+      "ur": ["آرڈر آئٹمز", "لائن آئٹمز", "آرڈر لائنیں"],
       "columns": {
-        "order_item_id": { "description": "Primary key", "ar": ["رقم البند"] },
-        "order_id": { "description": "Parent order", "ar": ["رقم الطلب"] },
-        "product_id": { "description": "Which product", "ar": ["رقم المنتج"] },
-        "quantity": { "description": "Units ordered", "ar": ["الكمية", "العدد"] },
-        "unit_price_aed": { "description": "Price actually charged per unit, after discount", "ar": ["سعر الوحدة", "السعر المدفوع"] }
+        "order_item_id": { "description": "Primary key", "ar": ["رقم البند"], "ur": ["آئٹم آئی ڈی"] },
+        "order_id": { "description": "Parent order", "ar": ["رقم الطلب"], "ur": ["آرڈر آئی ڈی"] },
+        "product_id": { "description": "Which product", "ar": ["رقم المنتج"], "ur": ["پروڈکٹ آئی ڈی"] },
+        "quantity": { "description": "Units ordered", "ar": ["الكمية", "العدد"], "ur": ["مقدار", "یونٹس"] },
+        "unit_price_aed": { "description": "Price actually charged per unit, after discount", "ar": ["سعر الوحدة", "السعر المدفوع"], "ur": ["وصول شدہ قیمت", "اصل قیمت"] }
       }
     },
     "products": {
       "description": "Product catalogue",
       "ar": ["المنتجات", "السلع", "منتج"],
+      "ur": ["پروڈکٹس", "پروڈکٹ", "مصنوعات"],
       "columns": {
-        "product_id": { "description": "Primary key", "ar": ["رقم المنتج"] },
-        "name_en": { "description": "Product name in English", "ar": ["اسم المنتج"] },
-        "name_ar": { "description": "Product name in Arabic", "ar": ["الاسم بالعربية"] },
-        "category": { "description": "Product category", "ar": ["الفئة", "التصنيف"] },
-        "unit_price_aed": { "description": "Catalogue list price in AED, before any discount", "ar": ["سعر القائمة", "السعر"] },
-        "weight_kg": { "description": "Unit weight in kilograms", "ar": ["الوزن"] }
+        "product_id": { "description": "Primary key", "ar": ["رقم المنتج"], "ur": ["پروڈکٹ آئی ڈی"] },
+        "name_en": { "description": "Product name in English", "ar": ["اسم المنتج"], "ur": ["پروڈکٹ کا نام"] },
+        "name_ar": { "description": "Product name in Arabic", "ar": ["الاسم بالعربية"], "ur": ["عربی نام"] },
+        "category": { "description": "Product category", "ar": ["الفئة", "التصنيف"], "ur": ["کیٹیگری", "زمرہ"] },
+        "unit_price_aed": { "description": "Catalogue list price in AED, before any discount", "ar": ["سعر القائمة", "السعر"], "ur": ["کیٹلاگ قیمت", "لسٹ قیمت"] },
+        "weight_kg": { "description": "Unit weight in kilograms", "ar": ["الوزن"], "ur": ["وزن"] }
       }
     },
     "warehouses": {
       "description": "Fulfilment centres",
       "ar": ["المستودعات", "المخازن", "مستودع"],
+      "ur": ["گودام", "گوداموں", "ویئر ہاؤس"],
       "columns": {
-        "warehouse_id": { "description": "Primary key", "ar": ["رقم المستودع"] },
-        "name_en": { "description": "Warehouse name in English", "ar": ["اسم المستودع"] },
-        "name_ar": { "description": "Warehouse name in Arabic", "ar": ["الاسم بالعربية"] },
-        "city": { "description": "City", "ar": ["المدينة"] },
-        "country": { "description": "Country", "ar": ["الدولة"] },
-        "capacity_m3": { "description": "Storage capacity in cubic metres", "ar": ["السعة", "الطاقة الاستيعابية"] }
+        "warehouse_id": { "description": "Primary key", "ar": ["رقم المستودع"], "ur": ["گودام آئی ڈی"] },
+        "name_en": { "description": "Warehouse name in English", "ar": ["اسم المستودع"], "ur": ["گودام کا نام"] },
+        "name_ar": { "description": "Warehouse name in Arabic", "ar": ["الاسم بالعربية"], "ur": ["عربی نام"] },
+        "city": { "description": "City", "ar": ["المدينة"], "ur": ["شہر"] },
+        "country": { "description": "Country", "ar": ["الدولة"], "ur": ["ملک"] },
+        "capacity_m3": { "description": "Storage capacity in cubic metres", "ar": ["السعة", "الطاقة الاستيعابية"], "ur": ["گنجائش"] }
       }
     },
     "couriers": {
       "description": "Delivery companies",
       "ar": ["شركات التوصيل", "الناقلون", "الناقل", "شركة الشحن"],
+      "ur": ["کورئیرز", "کورئیر", "ڈیلیوری کمپنیاں"],
       "columns": {
-        "courier_id": { "description": "Primary key", "ar": ["رقم الناقل"] },
-        "name_en": { "description": "Courier name in English", "ar": ["اسم الناقل"] },
-        "name_ar": { "description": "Courier name in Arabic", "ar": ["الاسم بالعربية"] },
-        "country": { "description": "Country of operation", "ar": ["الدولة"] },
-        "is_active": { "description": "1 if currently used, 0 if retired", "ar": ["نشط", "فعال"] }
+        "courier_id": { "description": "Primary key", "ar": ["رقم الناقل"], "ur": ["کورئیر آئی ڈی"] },
+        "name_en": { "description": "Courier name in English", "ar": ["اسم الناقل"], "ur": ["کورئیر کا نام"] },
+        "name_ar": { "description": "Courier name in Arabic", "ar": ["الاسم بالعربية"], "ur": ["عربی نام"] },
+        "country": { "description": "Country of operation", "ar": ["الدولة"], "ur": ["ملک"] },
+        "is_active": { "description": "1 if currently used, 0 if retired", "ar": ["نشط", "فعال"], "ur": ["فعال", "ایکٹو"] }
       }
     }
   }

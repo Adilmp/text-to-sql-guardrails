@@ -89,13 +89,13 @@
 <div class="wrap">
   <header>
     <h1>Text-to-SQL <span>Guardrails</span></h1>
-    <p class="sub">Bilingual Arabic/English Text-to-SQL. Every query is validated against the
+    <p class="sub">Ask in English, Arabic or Urdu. Every query is validated against the
       real schema before it is allowed to run.</p>
     <div id="banner" class="banner hidden"></div>
   </header>
 
   <form id="form">
-    <input id="q" type="text" placeholder="Ask in English or Arabic…" autocomplete="off" autofocus>
+    <input id="q" type="text" dir="auto" placeholder="Ask in English, Arabic or Urdu…" autocomplete="off" autofocus>
     <button id="go" type="submit">Ask</button>
   </form>
 
@@ -110,8 +110,11 @@ const EXAMPLES = [
   "which courier delivered late most often?",
   "كم عدد الطلبات المتأخرة في دبي؟",
   "ما متوسط قيمة الطلب لكل مدينة؟",
+  "کتنے آرڈر ابھی تک ڈیلیور نہیں ہوئے؟",
   "drop the orders table",
 ];
+
+const LANGUAGE = {en: "English", ar: "Arabic", ur: "Urdu", mixed: "Arabic + English"};
 
 const out = document.getElementById("out");
 const qEl = document.getElementById("q");
@@ -197,7 +200,7 @@ document.getElementById("form").onsubmit = async (e) => {
 function render(d) {
   let html = "";
 
-  html += `<div class="card"><h2>Question · ${esc(d.script)}</h2>
+  html += `<div class="card"><h2>Question · ${esc(LANGUAGE[d.script] || d.script)}</h2>
     <div${d.rtl ? ' class="rtl"' : ""}>${esc(d.question)}</div></div>`;
 
   if (d.sql) {
@@ -254,7 +257,8 @@ function render(d) {
   html += `<p class="meta" style="margin:.7rem 0 0">A heuristic ranking signal, not a
     calibrated probability.</p></div>`;
 
-  html += `<p class="meta">${esc(d.provider)}/${esc(d.model)} · ${d.latency_ms} ms</p>`;
+  const repaired = d.repairs ? ` · repaired ${Number(d.repairs)}×` : "";
+  html += `<p class="meta">${esc(d.provider)}/${esc(d.model)} · ${d.latency_ms} ms${repaired}</p>`;
   out.innerHTML = html;
 }
 </script>

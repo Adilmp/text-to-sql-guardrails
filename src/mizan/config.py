@@ -61,13 +61,25 @@ class Settings(BaseModel):
     provider: ProviderName = "ollama"
     ollama_host: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:7b"
+    #: How long Ollama keeps the model loaded after a request (an Ollama duration string).
+    ollama_keep_alive: str = "30m"
     anthropic_model: str = "claude-sonnet-5"
-    request_timeout_s: float = Field(default=120.0, gt=0)
+    # Sized from measurement, not habit (DDIA ch. 8, "Timeouts and Unbounded Delays"): on
+    # this CPU a cold request costs ~26 s to load qwen2.5:7b plus ~100-200 s to read the
+    # prompt, and the old 120 s limit cut the very first question of every run off mid-way.
+    # A timeout shorter than the slowest *healthy* response is a false alarm, and the retry
+    # it triggers adds load to the one server that is already busy.
+    request_timeout_s: float = Field(default=300.0, gt=0)
     max_retries: int = Field(default=2, ge=0, le=5)
 
     # -- generation --------------------------------------------------------------
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
-    max_output_tokens: int = Field(default=800, gt=0)
+    # The longest correct answer in the eval is ~110 tokens. 800 let a model that started
+    # explaining itself run for ~3 minutes on a CPU before the reply was even read.
+    max_output_tokens: int = Field(default=512, gt=0)
+    # How many times the model may be shown what was wrong with its query and asked to fix
+    # it (generate/pipeline.py). 0 disables the repair loop.
+    max_repairs: int = Field(default=2, ge=0, le=5)
     # Number of independent samples used for self-consistency scoring. 1 disables it.
     self_consistency_n: int = Field(default=1, ge=1, le=9)
     # Temperature used for the *extra* self-consistency samples. The first sample always
@@ -115,11 +127,13 @@ class Settings(BaseModel):
             "provider": provider,
             "ollama_host": _env_str("MIZAN_OLLAMA_HOST", "http://127.0.0.1:11434"),
             "ollama_model": _env_str("MIZAN_OLLAMA_MODEL", "qwen2.5:7b"),
+            "ollama_keep_alive": _env_str("MIZAN_OLLAMA_KEEP_ALIVE", "30m"),
             "anthropic_model": _env_str("MIZAN_ANTHROPIC_MODEL", "claude-sonnet-5"),
-            "request_timeout_s": _env_float("MIZAN_REQUEST_TIMEOUT_S", 120.0),
+            "request_timeout_s": _env_float("MIZAN_REQUEST_TIMEOUT_S", 300.0),
             "max_retries": _env_int("MIZAN_MAX_RETRIES", 2),
             "temperature": _env_float("MIZAN_TEMPERATURE", 0.0),
-            "max_output_tokens": _env_int("MIZAN_MAX_OUTPUT_TOKENS", 800),
+            "max_output_tokens": _env_int("MIZAN_MAX_OUTPUT_TOKENS", 512),
+            "max_repairs": _env_int("MIZAN_MAX_REPAIRS", 2),
             "self_consistency_n": _env_int("MIZAN_SELF_CONSISTENCY_N", 1),
             "max_rows": _env_int("MIZAN_MAX_ROWS", 200),
             "query_timeout_s": _env_float("MIZAN_QUERY_TIMEOUT_S", 5.0),

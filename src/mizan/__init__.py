@@ -1,4 +1,4 @@
-"""Bilingual Arabic/English Text-to-SQL with AST-level guardrails."""
+"""English, Arabic and Urdu Text-to-SQL with AST-level guardrails."""
 
 from __future__ import annotations
 

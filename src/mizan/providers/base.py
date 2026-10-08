@@ -28,6 +28,7 @@ from __future__ import annotations
 import abc
 import random
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,6 +36,20 @@ from ..errors import ProviderError, ProviderTimeout, ProviderUnavailable
 from ..logging import get_logger
 
 logger = get_logger("provider")
+
+#: One earlier turn of a conversation: ``("user" | "assistant", text)``. Used by the repair
+#: loop, which shows the model its own query and what was wrong with it.
+Turn = tuple[str, str]
+
+
+def build_messages(history: Sequence[Turn], user: str) -> list[dict[str, str]]:
+    """Chat messages for ``history`` followed by the new ``user`` turn."""
+    for role, _ in history:
+        if role not in ("user", "assistant"):
+            raise ValueError(f"history roles must be 'user' or 'assistant', got {role!r}")
+    return [{"role": role, "content": text} for role, text in history] + [
+        {"role": "user", "content": user}
+    ]
 
 
 @dataclass(frozen=True)
@@ -73,19 +88,36 @@ class Provider(abc.ABC):
 
     @abc.abstractmethod
     def _generate_once(
-        self, system: str, user: str, *, temperature: float, max_tokens: int
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
     ) -> Completion:
         """Single attempt. Must raise a :class:`ProviderError` subclass on failure."""
 
     def generate(
-        self, system: str, user: str, *, temperature: float = 0.0, max_tokens: int = 800
+        self,
+        system: str,
+        user: str,
+        *,
+        history: Sequence[Turn] = (),
+        temperature: float = 0.0,
+        max_tokens: int = 512,
     ) -> Completion:
-        """Generate with retry on transient failures."""
+        """Generate with retry on transient failures.
+
+        ``history`` holds earlier turns of the same conversation, oldest first; ``user`` is
+        the new message. The system prompt comes first and never changes between turns, so
+        a backend with a prompt cache only processes what is new.
+        """
+        messages = build_messages(history, user)
         last: ProviderError | None = None
         for attempt in range(self.max_retries + 1):
             try:
                 completion = self._generate_once(
-                    system, user, temperature=temperature, max_tokens=max_tokens
+                    system, messages, temperature=temperature, max_tokens=max_tokens
                 )
                 if attempt:
                     logger.info("recovered after retry", extra={"attempts": attempt + 1})

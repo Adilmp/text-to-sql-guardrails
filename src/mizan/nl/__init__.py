@@ -1,4 +1,4 @@
-"""Natural-language preprocessing: script detection and Arabic normalization."""
+"""Natural-language preprocessing: script/language detection and Arabic/Urdu normalization."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from .normalize import (
     strip_diacritics,
     strip_invisible,
     strip_tatweel,
+    urdu_score,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "strip_diacritics",
     "strip_invisible",
     "strip_tatweel",
+    "urdu_score",
 ]

@@ -26,6 +26,13 @@ Each one is cheap, independent, and fails in a different direction:
     Self-consistency: sample the model several times and see how often the *results* match.
     Comparing results rather than SQL text is deliberate — two queries can be spelled
     completely differently and be equally correct.
+``first_attempt``
+    The model's first query was usable. One that needed the repair loop (see
+    ``generate/repair.py``) was wrong at least once on this question, which is weak
+    evidence about the final answer too.
+``values_grounded``
+    Every text value the query filters on exists in its column (``validate/grounding.py``).
+    A value that isn't there is the classic silent zero-row answer.
 ``clean_rewrite``
     No guardrail had to rewrite the query. A LIMIT that had to be injected means the model
     ignored an explicit instruction, which correlates with it ignoring others.
@@ -103,6 +110,8 @@ def score_answer(
     row_count: int,
     agreement: float | None,
     rewrite_warnings: int,
+    repairs: int = 0,
+    ungrounded_values: int = 0,
 ) -> Confidence:
     """Combine the available signals into a single score.
 
@@ -133,6 +142,22 @@ def score_answer(
             f"{row_count} rows returned"
             if row_count > 0
             else "no rows returned - possible wrong literal or genuinely empty answer",
+        ),
+        Signal(
+            "first_attempt",
+            1.0 if repairs == 0 else 0.6,
+            0.10,
+            "the first query was usable"
+            if repairs == 0
+            else f"the model needed {repairs} repair(s) to produce a usable query",
+        ),
+        Signal(
+            "values_grounded",
+            1.0 if ungrounded_values == 0 else 0.3,
+            0.10,
+            "every text value filtered on exists in the data"
+            if ungrounded_values == 0
+            else f"{ungrounded_values} filter value(s) not found in the data",
         ),
         Signal(
             "clean_rewrite",

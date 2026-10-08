@@ -46,7 +46,12 @@ class AnthropicProvider(Provider):
         self._client = anthropic.Anthropic(timeout=timeout_s, max_retries=0)
 
     def _generate_once(
-        self, system: str, user: str, *, temperature: float, max_tokens: int
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
     ) -> Completion:
         started = time.perf_counter()
         try:
@@ -55,7 +60,7 @@ class AnthropicProvider(Provider):
                 max_tokens=max_tokens,
                 temperature=temperature,
                 system=system,
-                messages=[{"role": "user", "content": user}],
+                messages=messages,
             )
         except self._sdk.APITimeoutError as exc:
             raise ProviderTimeout(

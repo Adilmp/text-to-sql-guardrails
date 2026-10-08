@@ -26,22 +26,31 @@ class OllamaProvider(Provider):
         model: str = "qwen2.5:7b",
         *,
         host: str = "http://127.0.0.1:11434",
-        timeout_s: float = 120.0,
+        timeout_s: float = 300.0,
         max_retries: int = 2,
+        keep_alive: str = "30m",
     ) -> None:
         super().__init__(model, timeout_s=timeout_s, max_retries=max_retries)
         self.host = host.rstrip("/")
+        self.keep_alive = keep_alive
 
     def _generate_once(
-        self, system: str, user: str, *, temperature: float, max_tokens: int
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
     ) -> Completion:
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": [{"role": "system", "content": system}, *messages],
             "stream": False,
+            # Ollama unloads an idle model after 5 minutes by default. Reloading qwen2.5:7b
+            # takes ~26 s on this CPU and throws away the processed prompt, so the next
+            # question pays ~2 minutes. A demo is idle for longer than 5 minutes all the
+            # time; keeping the model resident is what makes the second question fast.
+            "keep_alive": self.keep_alive,
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,

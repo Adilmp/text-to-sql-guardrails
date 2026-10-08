@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ..config import Settings
 from ..errors import ConfigError
-from .base import Completion, Provider
+from .base import Completion, Provider, Turn
 from .mock import MockProvider
 from .ollama import OllamaProvider
 
@@ -13,6 +13,7 @@ __all__ = [
     "MockProvider",
     "OllamaProvider",
     "Provider",
+    "Turn",
     "build_provider",
 ]
 
@@ -31,6 +32,7 @@ def build_provider(settings: Settings) -> Provider:
             host=settings.ollama_host,
             timeout_s=settings.request_timeout_s,
             max_retries=settings.max_retries,
+            keep_alive=settings.ollama_keep_alive,
         )
     if settings.provider == "anthropic":
         from .anthropic import AnthropicProvider
