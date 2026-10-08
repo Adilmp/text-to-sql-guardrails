@@ -1,5 +1,5 @@
 {
-  "_comment": "Business terms with more than one reasonable meaning. When a question uses one (and nothing in it already settles the meaning), the server asks back with these options instead of letting the model guess. The chosen option's hint is added to the question, in English, for the model. Matched after normalize_for_matching(); Arabic-script terms and Latin terms of five letters or more also match as the start of a longer word (نفذ -> نفذها, fulfil -> fulfilled). See DECISIONS.md D43.",
+  "_comment": "Business terms with more than one reasonable meaning. When a question uses one (and nothing in it already settles the meaning), the server asks back with these options instead of letting the model guess. The chosen option's hint is added to the question, in English, for the model. Hints say what to do in the query, not just what the words mean: a vague hint lost to the Urdu verb it was clarifying (DECISIONS.md D43). Matched after normalize_for_matching(); Arabic-script terms and Latin terms of five letters or more also match as the start of a longer word (نفذ -> نفذها, fulfil -> fulfilled). See DECISIONS.md D43.",
   "ambiguities": [
     {
       "id": "fulfilled",
@@ -21,11 +21,11 @@
       "options": [
         {
           "label": {"en": "All orders, whatever their status", "ar": "كل الطلبات مهما كانت حالتها", "ur": "تمام آرڈر، چاہے ان کا اسٹیٹس کچھ بھی ہو"},
-          "hint": "count all orders, whatever their status"
+          "hint": "count every order whatever its status: do not filter on status"
         },
         {
           "label": {"en": "Only orders that were delivered", "ar": "الطلبات المسلّمة فقط", "ur": "صرف ڈیلیور شدہ آرڈر"},
-          "hint": "count only orders that were delivered"
+          "hint": "count only orders with status 'delivered'"
         }
       ]
     },
@@ -49,15 +49,15 @@
       "options": [
         {
           "label": {"en": "Revenue (AED)", "ar": "الإيرادات (درهم)", "ur": "آمدنی (درہم)"},
-          "hint": "measured by revenue, the prices actually charged"
+          "hint": "measure by revenue: the sum of quantity times the price charged on each order line"
         },
         {
           "label": {"en": "Units sold", "ar": "عدد الوحدات المباعة", "ur": "فروخت شدہ یونٹس"},
-          "hint": "measured by the number of units sold"
+          "hint": "measure by units sold: the sum of the quantity on each order line"
         },
         {
           "label": {"en": "Number of orders", "ar": "عدد الطلبات", "ur": "آرڈرز کی تعداد"},
-          "hint": "measured by the number of orders"
+          "hint": "measure by the number of orders: count the distinct orders that include it"
         }
       ]
     }
