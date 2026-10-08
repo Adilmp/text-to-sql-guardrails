@@ -114,6 +114,24 @@
   svg.chart .axis { stroke: var(--line); }
   svg.chart text { fill: var(--ink); font: 12px system-ui, sans-serif; }
   svg.chart text.muted { fill: var(--muted); font-size: 11px; }
+  .how { color: var(--muted); font-size: .88rem; margin-top: .45rem; unicode-bidi: plaintext; }
+  .feedback { display: flex; gap: .4rem; align-items: center; margin-top: .7rem;
+    font-size: .82rem; color: var(--muted); }
+  .feedback button { background: transparent; border: 1px solid var(--line);
+    padding: .15rem .55rem; font-size: .95rem; border-radius: 6px; }
+  .flag { display: inline-block; margin-top: .6rem; font-size: .8rem; font-weight: 600; }
+  .flag.ok { color: var(--accent); }
+  .flag.bad { color: var(--danger); }
+  details.tech > summary { cursor: pointer; color: var(--muted); font-size: .85rem;
+    margin: .2rem 0 .9rem; }
+  .help-link { background: none; border: 0; padding: 0; color: var(--accent);
+    font-size: .85rem; cursor: pointer; text-decoration: underline; margin: -.4rem 0 1rem; }
+  .topics { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: .6rem; }
+  .topics > div { border: 1px solid var(--line); border-radius: 8px; padding: .55rem .7rem;
+    font-size: .85rem; }
+  .topics b { display: block; }
+  .topics .alias { color: var(--muted); unicode-bidi: plaintext; }
 </style>
 </head>
 <body>
@@ -136,6 +154,8 @@
   </form>
 
   <div class="examples" id="examples"></div>
+  <button type="button" class="help-link" id="help-link">What can I ask?</button>
+  <div class="card hidden" id="help"></div>
 
   <div id="out"></div>
 </div>
@@ -219,7 +239,8 @@ function drawSuggestions() {
   suggestEl.innerHTML = suggestions.map((s, i) =>
     `<li role="option" id="sg-${i}" aria-selected="${i === picked}" data-i="${i}">`
     + `<span>${esc(s.question)}</span>`
-    + (s.instant ? `<span class="tag">⚡ instant</span>` : "") + `</li>`).join("");
+    + (s.verified ? `<span class="tag">✓ verified</span>`
+      : s.instant ? `<span class="tag">⚡ instant</span>` : "") + `</li>`).join("");
   suggestEl.classList.remove("hidden");
   qEl.setAttribute("aria-expanded", "true");
 }
@@ -290,6 +311,50 @@ async function copyAnswer(d, button) {
     button.textContent = "Copied";
   } catch { button.textContent = "Copy failed"; }
   setTimeout(() => { button.textContent = "Copy"; }, 1500);
+}
+
+// ------------------------------------------------------------------------ what can I ask
+// Tableau retired Ask Data partly because people had to know the field names to use it.
+// This lists what the database holds, with the Arabic and Urdu words the glossary knows.
+const helpEl = document.getElementById("help");
+document.getElementById("help-link").onclick = async () => {
+  if (!helpEl.classList.contains("hidden")) { helpEl.classList.add("hidden"); return; }
+  try {
+    const schema = await fetch("/api/schema").then(r => r.json());
+    const cards = Object.entries(schema.tables).map(([name, t]) =>
+      // First sentence only: the glossary's descriptions are written for the model and
+      // carry column names after that ("unit_price_aed here is ...").
+      `<div><b>${esc(name.replace(/_/g, " "))}</b> ${esc((t.description || "").split(". ")[0])}`
+      + ` <span class="meta">· ${Number(t.row_count).toLocaleString("en")} rows</span>`
+      + `<div class="alias" dir="auto">${esc([...t.aliases_ar.slice(0, 2), ...t.aliases_ur.slice(0, 2)].join(" · "))}</div></div>`);
+    helpEl.innerHTML = `<h2>What you can ask about</h2><div class="topics">${cards.join("")}</div>`
+      + `<p class="meta" style="margin:.7rem 0 0">Start typing for suggestions. Questions can be in `
+      + `English, Arabic or Urdu; names and places can be written either way.</p>`;
+    helpEl.classList.remove("hidden");
+  } catch { /* the panel is optional */ }
+};
+
+// ------------------------------------------------------------------------------ feedback
+// 👍 marks the answer verified (and suggestions show it first); 👎 stops it being served
+// from the cache and warns the next person. The page sends only the answer's id: the
+// server never accepts SQL from the browser.
+async function sendFeedback(d, verdict, box) {
+  box.textContent = "…";
+  try {
+    const r = await fetch("/api/feedback", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answer_id: d.answer_id, verdict }),
+    });
+    box.textContent = !r.ok ? "Couldn't save that, try asking again."
+      : verdict === "up" ? "Thanks: marked as a verified answer."
+      : "Thanks: reported. It won't be served from the cache again.";
+  } catch { box.textContent = "Couldn't save that."; }
+}
+
+// The phone's share sheet (WhatsApp included) where the browser has one.
+async function shareAnswer(d) {
+  const text = `${d.question}\n${d.summary || ""}`.trim();
+  try { await navigator.share({ text }); } catch { /* cancelled */ }
 }
 
 // ------------------------------------------------------------------------------- charts
@@ -400,7 +465,23 @@ function render(d) {
   // The answer first, for someone who doesn't read SQL; how it was produced comes after.
   if (d.summary) {
     html += `<div class="card"><h2>Answer</h2>
-      <div class="answer" dir="auto">${esc(d.summary)}</div></div>`;
+      <div class="answer" dir="auto">${esc(d.summary)}</div>`;
+    if (d.explanation) {
+      // The query in plain steps, so someone who doesn't read SQL can check what was counted.
+      html += `<div class="how" dir="auto">How: ${esc(d.explanation)}</div>`;
+    }
+    if (d.cache && d.cache.verified) {
+      html += `<span class="flag ok">✓ Verified: a person confirmed this answer.</span>`;
+    }
+    if (d.reported) {
+      html += `<span class="flag bad">⚠ Someone reported this answer as wrong. Check the steps above.</span>`;
+    }
+    if (d.answer_id) {
+      html += `<div class="feedback" id="feedback">Right answer?
+        <button type="button" id="up" title="Yes, this is right">👍</button>
+        <button type="button" id="down" title="No, this is wrong">👎</button></div>`;
+    }
+    html += `</div>`;
   }
 
   if (d.result && d.chart) {
@@ -412,7 +493,8 @@ function render(d) {
     const cols = d.result.columns, rows = d.result.rows;
     html += `<div class="card"><h2>Result · ${rows.length} rows</h2>
       <div class="actions"><button type="button" id="csv">Download CSV</button>
-      <button type="button" id="copy">Copy</button></div>
+      <button type="button" id="copy">Copy</button>
+      ${navigator.share ? '<button type="button" id="share">Share</button>' : ""}</div>
       <div class="scroll"><table><thead><tr>`;
     for (const c of cols) html += `<th>${esc(c)}</th>`;
     html += `</tr></thead><tbody>`;
@@ -427,6 +509,9 @@ function render(d) {
     html += `</div>`;
   }
 
+  // The evidence, one click away: open by default only when there is no answer to show.
+  html += `<details class="tech"${d.summary ? "" : " open"}><summary>Details: the SQL, `
+    + `the checks it passed and the confidence</summary>`;
   if (d.sql) {
     html += `<div class="card"><h2>Generated SQL</h2><pre>${esc(d.sql)}</pre></div>`;
   }
@@ -465,8 +550,15 @@ function render(d) {
       + `SQL validated and run again)`
     : "";
   html += `<p class="meta">${esc(d.provider)}/${esc(d.model)} · ${d.latency_ms} ms`
-    + `${repaired}${cached}</p>`;
+    + `${repaired}${cached}</p></details>`;
   out.innerHTML = html;
+  if (d.answer_id) {
+    const box = document.getElementById("feedback");
+    document.getElementById("up").onclick = () => sendFeedback(d, "up", box);
+    document.getElementById("down").onclick = () => sendFeedback(d, "down", box);
+  }
+  const share = document.getElementById("share");
+  if (share) share.onclick = () => shareAnswer(d);
   if (d.result) {
     document.getElementById("csv").onclick = () => downloadCSV(d.result);
     const copy = document.getElementById("copy");

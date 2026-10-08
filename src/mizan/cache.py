@@ -134,6 +134,10 @@ class CacheSettings:
         )
 
 
+#: Entry status. A person confirmed it (👍), nobody said anything, or a person reported it (👎).
+VERIFIED, NORMAL, REPORTED = 1, 0, -1
+
+
 @dataclass(frozen=True)
 class CacheHit:
     """Where a cached answer came from, for the response and the UI."""
@@ -141,9 +145,16 @@ class CacheHit:
     question: str
     hits: int
     created_at: str
+    verified: bool = False
 
     def to_dict(self) -> dict[str, object]:
-        return {"hit": True, "matched": self.question, "hits": self.hits, "since": self.created_at}
+        return {
+            "hit": True,
+            "matched": self.question,
+            "hits": self.hits,
+            "since": self.created_at,
+            "verified": self.verified,
+        }
 
 
 def cache_context(engine: TextToSQL) -> str:
@@ -179,13 +190,25 @@ class AnswerCache:
                 " sql TEXT NOT NULL, confidence REAL NOT NULL, created_at TEXT NOT NULL,"
                 " hits INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (context, key))"
             )
+            # Added after the first release, so older cache files gain it here. A new
+            # column with a default is the change old code can live with (DDIA ch. 4):
+            # writers that don't know it still insert valid rows, which read as "normal".
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(answers)")}
+            if "status" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE answers ADD COLUMN status INTEGER NOT NULL DEFAULT 0"
+                )
             self._conn.commit()
 
-    def get(self, context: str, key: str) -> tuple[str, str, int, str] | None:
-        """``(question, sql, hits, created_at)`` for a stored entry, and count the hit."""
+    def get(self, context: str, key: str) -> tuple[str, str, int, str, int] | None:
+        """``(question, sql, hits, created_at, status)`` for a servable entry; counts the hit.
+
+        A reported entry is never served: the question goes back to the model.
+        """
         with self._lock:
             row = self._conn.execute(
-                "SELECT question, sql, hits, created_at FROM answers WHERE context = ? AND key = ?",
+                "SELECT question, sql, hits, created_at, status FROM answers"
+                " WHERE context = ? AND key = ? AND status >= 0",
                 (context, key),
             ).fetchone()
             if row is None:
@@ -194,7 +217,28 @@ class AnswerCache:
                 "UPDATE answers SET hits = hits + 1 WHERE context = ? AND key = ?", (context, key)
             )
             self._conn.commit()
-        return str(row[0]), str(row[1]), int(row[2]) + 1, str(row[3])
+        return str(row[0]), str(row[1]), int(row[2]) + 1, str(row[3]), int(row[4])
+
+    def status(self, context: str, key: str) -> tuple[str, int] | None:
+        """``(sql, status)`` of the entry for ``key``, whatever its status; no hit counted."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT sql, status FROM answers WHERE context = ? AND key = ?", (context, key)
+            ).fetchone()
+        return (str(row[0]), int(row[1])) if row else None
+
+    def mark(self, context: str, key: str, question: str, sql: str, status: int) -> None:
+        """Record a person's verdict on ``sql`` as the answer to ``question``."""
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO answers (context, key, question, sql, confidence, created_at,"
+                " hits, status) VALUES (?, ?, ?, ?, 1.0, ?, 0, ?)"
+                " ON CONFLICT (context, key) DO UPDATE SET"
+                " sql = excluded.sql, status = excluded.status",
+                (context, key, question, sql, now, status),
+            )
+            self._conn.commit()
 
     def has(self, context: str, key: str) -> bool:
         """Whether an entry exists, without counting a hit (for pre-filling)."""
@@ -205,8 +249,17 @@ class AnswerCache:
         return row is not None
 
     def put(self, context: str, key: str, question: str, sql: str, confidence: float) -> None:
+        """Store a confident answer, unless a person already reported this exact query."""
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self._lock:
+            reported = self._conn.execute(
+                "SELECT 1 FROM answers WHERE context = ? AND key = ? AND sql = ? AND status < 0",
+                (context, key, sql),
+            ).fetchone()
+            if reported:
+                # The model (deterministic at temperature 0) gave the same answer someone
+                # reported. Re-caching it would undo the report.
+                return
             self._conn.execute(
                 "INSERT OR REPLACE INTO answers (context, key, question, sql, confidence,"
                 " created_at, hits) VALUES (?, ?, ?, ?, ?, ?, 0)",
@@ -275,7 +328,7 @@ class CachedTextToSQL:
         entry = self.cache.get(self.context, key)
         if entry is None:
             return None
-        cached_question, sql, hits, created_at = entry
+        cached_question, sql, hits, created_at, status = entry
 
         # Validated again, exactly like a fresh model answer: the cache file is untrusted.
         report = validate(sql, self.engine.catalog, self.engine.policy)
@@ -318,4 +371,19 @@ class CachedTextToSQL:
             latency_ms=(time.perf_counter() - started) * 1000,
         )
         logger.info("answered from cache", extra={"hits": hits})
-        return answer, CacheHit(cached_question, hits, created_at)
+        return answer, CacheHit(cached_question, hits, created_at, verified=status == VERIFIED)
+
+    def verdict(self, question: str, sql: str, up: bool) -> None:
+        """A person said this answer is right (``up``) or wrong."""
+        if self.cache is None:
+            return
+        key = canonical_question(question)
+        if key:
+            self.cache.mark(self.context, key, question, sql, VERIFIED if up else REPORTED)
+
+    def reported(self, question: str, sql: str) -> bool:
+        """Whether a person reported exactly this query as the wrong answer to ``question``."""
+        if self.cache is None or not (key := canonical_question(question)):
+            return False
+        entry = self.cache.status(self.context, key)
+        return entry is not None and entry[0] == sql and entry[1] == REPORTED
