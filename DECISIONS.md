@@ -44,6 +44,7 @@ Each one ends with **In short**: the decision and its reason in one line.
 | D37 | Timeouts and keep-alive come from measured latency | Engineering |
 | D38 | Urdu is detected by its letters | Urdu |
 | D39 | New eval cases are reported, not inconclusive; renames are declared | Evaluation |
+| D40 | The answer cache matches only meaning-free variation, and stores SQL, not rows | Serving |
 
 ---
 
@@ -685,3 +686,49 @@ DDIA ch. 4 makes the same point about schemas: adding is compatible, removing is
 rename has to be explicit.
 **In short:** *"Growing the suite must pass the gate; shrinking it, or renaming it silently,
 must not."*
+
+## D40: The answer cache matches only meaning-free variation, and stores SQL, not rows
+**Decision:** The server keeps a small SQLite cache of answers (`mizan/cache.py`). Two questions
+share an entry only when they differ in case, spacing, punctuation, polite filler ("please",
+"من فضلك", "براہ کرم"), Arabic and Urdu spelling or keyboard variants, or digit script. An entry
+holds the validated SQL; a hit validates it again and re-runs it, which takes milliseconds
+instead of the seconds a generation costs on a CPU. Only answers the pipeline was sure of are
+stored: executed, high confidence, no repair, every filter value found in the data.
+**Alternative measured and rejected: matching paraphrases by embedding similarity.** It was
+the obvious way to catch "similar questions", so it was measured first, with the local
+`nomic-embed-text` on the eval questions:
+
+| Pair | Same answer? | Cosine similarity |
+|---|---|---:|
+| "customers in **Dubai**" / "customers in **Riyadh**" | no | 1.000 |
+| "late **most** often" / "late **least** often" | no | 0.995 |
+| two *different* Arabic questions (late orders / undelivered orders) | no | 0.988 |
+| "orders above **500**" / "orders above **600**" | no | 0.966 |
+| "delivered late" / "delivered early" | no | 0.953 |
+| true English rewordings | yes | 0.938–0.976 |
+| the same question, English / Arabic | yes | 0.52–0.61 |
+
+The differences that change the answer score as high as, or higher than, real rewordings, and
+in Arabic and Urdu different questions are nearly indistinguishable. No threshold separates
+them, and a guard listing every meaning-changing word in three languages can't be complete
+("placed" vs "delivered" would slip through). A similarity cache would serve confident wrong
+answers: worse than no cache.
+**Why SQL and not rows:** the cache is derived data (DDIA ch. 11–12). Re-running the query keeps
+every answer as fresh as the data at a cost of milliseconds; what is worth skipping is the
+model.
+**The cache file is untrusted.** Whatever can write to it can plant SQL, so every hit goes
+through the same validator as a fresh answer, and one that fails is deleted. The cache can make
+an answer faster, never less checked.
+**Invalidation by construction:** entries are keyed by a hash of the system prompt (schema,
+value lists, row counts), the backend and the model. Change any of them and old entries stop
+matching; nothing has to remember to clear anything.
+**Where it lives:** in front of the pipeline, in the server. The eval harness never goes through
+it, so measured accuracy and latency are the model's own; its settings (`MIZAN_CACHE`,
+`MIZAN_CACHE_PATH`) are outside `config.py` and the behaviour fingerprint because it changes how
+fast an answer arrives, not what it is.
+**Found while building it:** the server now keeps the model loaded for as long as it runs
+(`keep_alive` of `-1m`; Ollama rejects the string `"-1"`, which briefly broke every question),
+and `/api/health` says whether the warm-up is running, done, or failed, so the page shows
+"warming up" instead of a counter that looks like a hang.
+**In short:** *"Cache what is safe to call the same question, and measure before trusting
+similarity."*
