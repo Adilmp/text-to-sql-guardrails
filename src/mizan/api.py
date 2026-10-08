@@ -17,15 +17,14 @@ still return real error codes.
 
 from __future__ import annotations
 
-import os
 import threading
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-import httpx
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -34,7 +33,9 @@ from .config import Settings
 from .errors import MizanError, ProviderError
 from .generate import TextToSQL
 from .logging import configure, get_logger, run_context
+from .present import chart_spec, summarize
 from .providers import build_provider
+from .questions import Suggester, curated_questions, names_from_db
 from .schema import load_catalog
 
 logger = get_logger("api")
@@ -65,6 +66,15 @@ class AskResponse(BaseModel):
     repairs: int = 0
     #: Set when the answer came from the cache: which earlier question it matched.
     cache: dict[str, Any] | None = None
+    #: The answer as one line in the question's language, built from the result (present.py).
+    summary: str | None = None
+    #: Which chart fits the result: {"type": "bar" | "line", "label": col, "value": col}.
+    chart: dict[str, Any] | None = None
+
+
+#: How often an idle server re-sends its warm-up. Well inside the 30-minute keep-alive, so the
+#: model never unloads while the server is up.
+KEEP_WARM_EVERY_S = 600.0
 
 
 def create_app(
@@ -76,15 +86,32 @@ def create_app(
     injected settings (a temporary database, the mock provider) without touching the
     environment.
     """
-    cfg = serving_settings(settings or Settings.from_env())
+    cfg = settings or Settings.from_env()
     if cache_settings is None:
         # Injected settings mean a test or an embedding app: no cache file unless asked for.
         cache_settings = CacheSettings.from_env() if settings is None else CacheSettings(False)
     cfg.ensure_dirs()
     configure(cfg.log_level, cfg.log_dir, console=False)
 
-    state: dict[str, Any] = {"warmup": "running"}
+    state: dict[str, Any] = {"warmup": "running", "last_used": time.monotonic()}
     ready = threading.Event()
+    stop_keep_warm = threading.Event()
+
+    def keep_warm() -> None:
+        """While the server runs, keep the model loaded and its prompt processed.
+
+        Ollama unloads an idle model after its keep-alive (30 minutes here), and the next
+        visitor then pays the whole cold start: minutes on a CPU. Re-sending the normal
+        warm-up when nobody has asked anything for a while resets that timer and costs a
+        second or two, because the prompt is still cached. It goes through the same provider
+        call as every question on purpose: an earlier version sent Ollama a bare keep-alive
+        request instead, without the context size the model was loaded with, and Ollama
+        *reloaded* the model, throwing the processed prompt away (DECISIONS.md D40). When the
+        server stops, so do these, and Ollama unloads the model on its own.
+        """
+        while not stop_keep_warm.wait(KEEP_WARM_EVERY_S):
+            if time.monotonic() - state["last_used"] >= KEEP_WARM_EVERY_S:
+                state["engine"].warm_up()
 
     def warm_up() -> None:
         try:
@@ -104,11 +131,13 @@ def create_app(
         cache = AnswerCache(cache_settings.path) if cache_settings.enabled else None
         state["cache"] = cache
         state["served"] = CachedTextToSQL(state["engine"], cache, cache_settings)
+        state["suggester"] = Suggester(q for _, q in curated_questions(names_from_db(cfg.db_path)))
         if state["provider"].name != "mock":
             # Read the prompt into the model's cache now, in the background, so the first
             # visitor doesn't wait minutes on a CPU. A request that arrives first queues
             # behind it in the model server; /api/health reports `warming_up` meanwhile.
             threading.Thread(target=warm_up, daemon=True).start()
+            threading.Thread(target=keep_warm, daemon=True).start()
         else:
             state["warmup"] = "ready"
             ready.set()
@@ -117,8 +146,7 @@ def create_app(
             extra={"provider": state["provider"].name, "model": state["provider"].model},
         )
         yield
-        if state["provider"].name == "ollama" and cfg.ollama_keep_alive == KEEP_LOADED:
-            _release_model(cfg)
+        stop_keep_warm.set()
         if cache is not None:
             cache.close()
         state.clear()
@@ -183,6 +211,20 @@ def create_app(
             "model": provider.model if provider else None,
         }
 
+    @app.get("/api/suggest")
+    async def suggest(
+        q: str = Query("", max_length=300), limit: int = Query(8, ge=1, le=20)
+    ) -> dict[str, Any]:
+        """Curated questions matching what has been typed, cached ("instant") ones first."""
+        served: CachedTextToSQL = state["served"]
+        cache = state.get("cache")
+
+        def is_cached(key: str) -> bool:
+            return cache is not None and cache.has(served.context, key)
+
+        found = state["suggester"].suggest(q, is_cached=is_cached, limit=limit)
+        return {"suggestions": [s.to_dict() for s in found]}
+
     @app.get("/api/schema")
     async def schema() -> dict[str, Any]:
         catalog = state["catalog"]
@@ -206,6 +248,7 @@ def create_app(
     @app.post("/api/ask", response_model=AskResponse)
     def ask(request: AskRequest) -> AskResponse:
         served: CachedTextToSQL = state["served"]
+        state["last_used"] = time.monotonic()
         hit = None
 
         with run_context() as run_id:
@@ -249,39 +292,10 @@ def create_app(
             latency_ms=round(answer.latency_ms, 1),
             repairs=answer.repairs,
             cache=hit.to_dict() if hit else None,
+            summary=summarize(answer.question, answer.script, answer.result)
+            if answer.result
+            else None,
+            chart=chart_spec(answer.result) if answer.result else None,
         )
 
     return app
-
-
-#: Ollama's "keep loaded until told otherwise". A negative duration; the bare string "-1"
-#: is rejected by Ollama ("missing unit in duration"), which is how this constant came about.
-KEEP_LOADED = "-1m"
-
-
-def serving_settings(cfg: Settings) -> Settings:
-    """Settings for a long-running server: keep the model loaded while it runs.
-
-    With Ollama's default the model unloads after idle minutes, and the next visitor pays the
-    whole cold start again: loading the model and reading the prompt, minutes on a CPU
-    (D37). An explicit ``MIZAN_OLLAMA_KEEP_ALIVE`` always wins.
-    """
-    if cfg.provider == "ollama" and "MIZAN_OLLAMA_KEEP_ALIVE" not in os.environ:
-        return cfg.model_copy(update={"ollama_keep_alive": KEEP_LOADED})
-    return cfg
-
-
-def _release_model(cfg: Settings) -> None:
-    """On shutdown, hand the model back to Ollama's normal idle timeout.
-
-    Not an immediate unload: a server restarted within the half hour (as ``--reload`` does on
-    every edit) finds the model and its processed prompt still warm.
-    """
-    try:
-        httpx.post(
-            f"{cfg.ollama_host.rstrip('/')}/api/generate",
-            json={"model": cfg.ollama_model, "keep_alive": "30m"},
-            timeout=5.0,
-        )
-    except httpx.HTTPError as exc:
-        logger.warning("could not release the model", extra={"error": str(exc)})

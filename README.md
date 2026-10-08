@@ -20,7 +20,7 @@ confidence score that explains its weakest point.
 | English / Arabic / Urdu | 18/20 · 17/20 · 16/20 on the development suite (Urdu is new; it scored 10/20 through the old Arabic path) |
 | Speed | 8 s median, 22 s p95 per question on a 6-core CPU; the ~3-minute one-off warm-up happens at startup |
 | Harmful statements executed | **0**: every answer to an adversarial prompt contained, across two models |
-| Tests | 372, all offline in ~10 s, run in CI on Python 3.10–3.12 (55 of them security tests) |
+| Tests | 400, all offline in ~10 s, run in CI on Python 3.10–3.12 (55 of them security tests) |
 
 ## The problem
 
@@ -139,6 +139,18 @@ every number, per language, per tag and per failure, generated from the run file
   accurate, never less safe.
 - **Not measured:** the Spider benchmark (its databases aren't downloadable unattended), the
   Anthropic backend (no API key was available), dialectal Arabic and Roman Urdu.
+
+## What a user sees
+
+- **The answer first, in their language**, as one line built from the result (never written by
+  the model, so it can't misstate a number): "188 orders were delivered late.",
+  "عدد الطلبات المتأخرة في دبي: 20", "295 آرڈر ابھی تک ڈیلیور نہیں ہوئے۔"
+- **A chart** when the result is a label and a number: bars, or a line for months and years.
+- **Download CSV / Copy**, with the byte-order mark Excel needs for Arabic and Urdu, and cells
+  that look like formulas defused.
+- **Suggestions as they type**, from a curated list (never other people's questions), cached
+  ones first and marked ⚡ *instant*.
+- Then the evidence: the SQL, any guardrail notes, and the confidence signals ([D41](DECISIONS.md)).
 
 ## Repeated questions: the answer cache
 
@@ -271,7 +283,7 @@ MIZAN_PROVIDER=mock uv run mizan ask "drop the orders table"
 | `uv run mizan eval --suite both --resume` | Development suite + adversarial suite; results land in `runs/` |
 | `uv run mizan eval --suite holdout` | The held-out suite, on purpose ([D31](DECISIONS.md)) |
 | `uv run mizan health` | Check the database and the model backend |
-| `uv run pytest` | 372 tests, offline, about 10 seconds |
+| `uv run pytest` | 400 tests, offline, about 10 seconds |
 
 Settings come from `MIZAN_*` environment variables (`MIZAN_PROVIDER`, `MIZAN_OLLAMA_MODEL`,
 `MIZAN_MAX_REPAIRS`, `MIZAN_OLLAMA_KEEP_ALIVE`, `MIZAN_MAX_ROWS`, …); see
@@ -284,7 +296,7 @@ the model then stays loaded for as long as the server runs.
 
 ## Design decisions
 
-40 decisions are written up in [DECISIONS.md](DECISIONS.md). The most important:
+41 decisions are written up in [DECISIONS.md](DECISIONS.md). The most important:
 
 - **Parse, never regex:** safety is decided on a syntax tree (D1), with a function allowlist that
   fails closed (D3) and names read the way SQLite will see them (D2).
@@ -317,8 +329,8 @@ the model then stays loaded for as long as the server runs.
 │   ├── providers/       # Ollama, Anthropic, mock behind one interface
 │   ├── eval/            # suites (dev, held-out, adversarial), metrics, durable runner, regression gate
 │   ├── db/              # synthetic database builder, Spider loader
-│   └── api.py, cache.py, cli.py, config.py, logging.py, errors.py
-├── tests/               # 372 tests, including tests/test_security.py, tests/test_repair.py and tests/test_cache.py
+│   └── api.py, cache.py, present.py, questions.py, cli.py, config.py, logging.py, errors.py
+├── tests/               # 400 tests, including tests/test_security.py, tests/test_repair.py and tests/test_cache.py
 ├── scripts/             # run_eval.py, rescore.py, report.py, regression_gate.py
 ├── runs/                # raw eval results (the gate's baselines) and the before-this-change baseline
 ├── regression-gate.json # what the regression gate tolerates
@@ -331,7 +343,7 @@ the model then stays loaded for as long as the server runs.
 
 | | |
 |---|---|
-| [DECISIONS.md](DECISIONS.md) | Why every choice was made (40 decisions) |
+| [DECISIONS.md](DECISIONS.md) | Why every choice was made (41 decisions) |
 | [SECURITY.md](SECURITY.md) | Threat model, controls, three vulnerabilities found by testing, known limits |
 | [docs/results.md](docs/results.md) | Every measured number, per model, per language, per tag, per failure |
 

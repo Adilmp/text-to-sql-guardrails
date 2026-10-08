@@ -45,6 +45,7 @@ Each one ends with **In short**: the decision and its reason in one line.
 | D38 | Urdu is detected by its letters | Urdu |
 | D39 | New eval cases are reported, not inconclusive; renames are declared | Evaluation |
 | D40 | The answer cache matches only meaning-free variation, and stores SQL, not rows | Serving |
+| D41 | Answers are presented for people: a sentence from the result, a chart, CSV, suggestions | Serving |
 
 ---
 
@@ -726,10 +727,15 @@ matching; nothing has to remember to clear anything.
 it, so measured accuracy and latency are the model's own; its settings (`MIZAN_CACHE`,
 `MIZAN_CACHE_PATH`) are outside `config.py` and the behaviour fingerprint because it changes how
 fast an answer arrives, not what it is.
-**Found while building it:** the server now keeps the model loaded for as long as it runs
-(`keep_alive` of `-1m`; Ollama rejects the string `"-1"`, which briefly broke every question),
-and `/api/health` says whether the warm-up is running, done, or failed, so the page shows
-"warming up" instead of a counter that looks like a hang.
+**Found while building it:** keeping the model warm while the server runs took two tries. The
+first pinned it with Ollama's `keep_alive` (`"-1"` as a string is rejected with HTTP 400, which
+briefly broke every question; `"-1m"` works) and released it on shutdown with a bare keep-alive
+request. That request didn't carry the context size the model was loaded with, so Ollama
+*reloaded* the model and threw the processed prompt away: stopping the demo cost a running
+pre-fill a 4.5-minute re-read. Now an idle server simply re-sends its normal warm-up every 10
+minutes, through the same provider call as every question, and Ollama unloads the model on its
+own 30 minutes after the server stops. `/api/health` says whether the warm-up is running, done
+or failed, so the page shows "warming up" instead of a counter that looks like a hang.
 **Pre-filling:** `scripts/prefill_cache.py` asks the model the questions people are likely to ask
 (the demo examples, every eval question, templated questions for every city, country, status,
 category, segment, courier, warehouse and product in three languages) so they answer instantly
@@ -739,3 +745,31 @@ the same bar as any other, and the eval's gold queries are never planted, becaus
 answers its own test questions perfectly would misrepresent the model.
 **In short:** *"Cache what is safe to call the same question, and measure before trusting
 similarity."*
+
+## D41: Answers are presented for people: a sentence from the result, a chart, CSV, suggestions
+**Decision:** Every answer leads with one line in the question's language ("188 orders were
+delivered late.", "عدد الطلبات المتأخرة في دبي: 20", "295 آرڈر ابھی تک ڈیلیور نہیں ہوئے۔"), then a
+chart when the result has one label and one number column, then the table with *Download CSV*
+and *Copy*, then the SQL and the confidence. As the user types, curated questions are suggested,
+cached ones first and marked *instant*.
+**The sentence is built from the result, never written by the model** (`present.py`). A model
+would cost another generation and could get the number wrong; a template restates the question
+around the value the query returned. Urdu is the easy language: "how many" (کتنے) sits in
+front of its noun, so the number simply replaces it. When no template fits, the line still
+answers in the question's language ("Answer: 191"). The cost, stated plainly: a fluent sentence
+makes a wrong answer more convincing, which is why the SQL and the confidence stay on the same
+page, directly below it.
+**Suggestions never show what other people asked.** They come only from the curated list
+(`mizan/questions.py`: demo examples, eval questions, templates per city, status, product…),
+not from the cache, which also holds every visitor's questions; "how many orders did customer
+Ahmed Al Harbi cancel?" must not appear in the next person's dropdown. A test asks a question
+and checks it is never suggested.
+**CSV is written for Excel in Arabic and Urdu, and for hostile cells:** a UTF-8 byte-order mark
+(without it Excel shows Arabic as mojibake), and a `'` before any text cell starting with
+`=`, `+`, `-` or `@`, because database values such as customer names are user input and a
+spreadsheet would otherwise run them as formulas (CSV injection).
+**Charts are inline SVG.** The page's content security policy loads no external scripts
+(SECURITY.md), and two chart shapes (bars, a line for months) don't need a library. Which chart
+fits is decided in Python (`chart_spec`, tested); the page only draws.
+**In short:** *"Lead with the answer in the user's words, built from the data, and keep the
+evidence one scroll away."*

@@ -83,6 +83,37 @@
     border: 1px solid var(--warn); color: var(--warn); background: #9a6b1f14;
   }
   .banner.live { border-color: var(--accent); color: var(--accent); background: #2f6f5f14; }
+  /* The answer, as one line in the question's language (built from the result, present.py). */
+  .answer { font-size: 1.3rem; font-weight: 600; line-height: 1.45; unicode-bidi: plaintext; }
+  /* Suggestions under the question box. */
+  .field { position: relative; flex: 1; display: flex; }
+  .field input[type=text] { width: 100%; }
+  .suggest {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 10;
+    margin: 0; padding: .3rem 0; list-style: none; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px #0002;
+    max-height: 22rem; overflow-y: auto;
+  }
+  .suggest li {
+    padding: .45rem .8rem; cursor: pointer; display: flex; gap: .6rem;
+    justify-content: space-between; align-items: baseline; unicode-bidi: plaintext;
+  }
+  .suggest li[aria-selected="true"], .suggest li:hover { background: var(--code-bg); }
+  .suggest .tag { color: var(--accent); font-size: .72rem; white-space: nowrap; }
+  /* Small secondary buttons: CSV, copy. */
+  .actions { display: flex; gap: .4rem; margin: -.2rem 0 .6rem; }
+  .actions button {
+    background: transparent; color: var(--accent); border: 1px solid var(--line);
+    padding: .25rem .65rem; font-size: .78rem; border-radius: 6px;
+  }
+  /* Charts are inline SVG: the page's CSP allows no external scripts, and none are needed. */
+  svg.chart { width: 100%; height: auto; display: block; }
+  svg.chart .bar-fill { fill: var(--accent); opacity: .85; }
+  svg.chart .line { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+  svg.chart .dot { fill: var(--accent); }
+  svg.chart .axis { stroke: var(--line); }
+  svg.chart text { fill: var(--ink); font: 12px system-ui, sans-serif; }
+  svg.chart text.muted { fill: var(--muted); font-size: 11px; }
 </style>
 </head>
 <body>
@@ -95,7 +126,12 @@
   </header>
 
   <form id="form">
-    <input id="q" type="text" dir="auto" placeholder="Ask in English, Arabic or Urdu…" autocomplete="off" autofocus>
+    <div class="field">
+      <input id="q" type="text" dir="auto" placeholder="Ask in English, Arabic or Urdu…"
+        autocomplete="off" autofocus role="combobox" aria-autocomplete="list"
+        aria-controls="suggest" aria-expanded="false">
+      <ul id="suggest" class="suggest hidden" role="listbox"></ul>
+    </div>
     <button id="go" type="submit">Ask</button>
   </form>
 
@@ -167,8 +203,135 @@ for (const ex of EXAMPLES) {
 const esc = (s) => String(s).replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+// ---------------------------------------------------------------- suggestions as you type
+// The list comes from /api/suggest: curated questions only (never other users' questions),
+// cached ones first and marked "instant", because picking one answers in milliseconds.
+const suggestEl = document.getElementById("suggest");
+let suggestions = [], picked = -1, suggestSeq = 0, suggestTimer = null;
+
+function closeSuggestions() {
+  suggestEl.classList.add("hidden");
+  qEl.setAttribute("aria-expanded", "false");
+  suggestions = []; picked = -1;
+}
+function drawSuggestions() {
+  if (!suggestions.length) { closeSuggestions(); return; }
+  suggestEl.innerHTML = suggestions.map((s, i) =>
+    `<li role="option" id="sg-${i}" aria-selected="${i === picked}" data-i="${i}">`
+    + `<span>${esc(s.question)}</span>`
+    + (s.instant ? `<span class="tag">⚡ instant</span>` : "") + `</li>`).join("");
+  suggestEl.classList.remove("hidden");
+  qEl.setAttribute("aria-expanded", "true");
+}
+function choose(i) {
+  qEl.value = suggestions[i].question;
+  closeSuggestions();
+  document.getElementById("form").requestSubmit();
+}
+qEl.addEventListener("input", () => {
+  clearTimeout(suggestTimer);
+  const text = qEl.value.trim();
+  if (text.length < 2) { closeSuggestions(); return; }
+  suggestTimer = setTimeout(async () => {
+    const seq = ++suggestSeq;  // answers can arrive out of order; only the latest counts
+    try {
+      const r = await fetch(`/api/suggest?q=${encodeURIComponent(text)}&limit=8`);
+      const body = await r.json();
+      if (seq !== suggestSeq) return;
+      suggestions = body.suggestions || []; picked = -1;
+      drawSuggestions();
+    } catch { closeSuggestions(); }
+  }, 120);
+});
+qEl.addEventListener("keydown", (e) => {
+  if (suggestEl.classList.contains("hidden")) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    picked = (picked + step + suggestions.length) % suggestions.length;
+    drawSuggestions();
+  } else if (e.key === "Enter" && picked >= 0) {
+    e.preventDefault(); choose(picked);
+  } else if (e.key === "Escape") {
+    closeSuggestions();
+  }
+});
+// mousedown, not click: it fires before the input's blur closes the list.
+suggestEl.addEventListener("mousedown", (e) => {
+  const li = e.target.closest("li");
+  if (li) { e.preventDefault(); choose(Number(li.dataset.i)); }
+});
+qEl.addEventListener("blur", () => setTimeout(closeSuggestions, 100));
+
+// -------------------------------------------------------------------- CSV and clipboard
+// Excel needs the byte-order mark to read Arabic and Urdu as UTF-8. A cell that starts
+// with = + - @ (or a tab/return) is prefixed with ' so a spreadsheet shows it as text
+// instead of running it as a formula: database values (customer names) are user input.
+function csvCell(v) {
+  if (v === null || v === undefined) return "";
+  let text = String(v);
+  if (typeof v === "string" && /^[=+\-@\t\r]/.test(text)) text = "'" + text;
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+function downloadCSV(result) {
+  const lines = [result.columns, ...result.rows].map(r => r.map(csvCell).join(","));
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `answer-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+async function copyAnswer(d, button) {
+  const table = [d.result.columns, ...d.result.rows]
+    .map(r => r.map(v => v === null ? "" : String(v)).join("\t")).join("\n");
+  try {
+    await navigator.clipboard.writeText((d.summary ? d.summary + "\n\n" : "") + table);
+    button.textContent = "Copied";
+  } catch { button.textContent = "Copy failed"; }
+  setTimeout(() => { button.textContent = "Copy"; }, 1500);
+}
+
+// ------------------------------------------------------------------------------- charts
+// The server picks the chart (present.chart_spec, tested in Python); the page only draws.
+function chartSVG(result, spec) {
+  const pairs = result.rows.map(r => [r[spec.label], r[spec.value]])
+    .filter(p => typeof p[1] === "number");
+  if (pairs.length < 2 || pairs.some(p => p[1] < 0)) return "";
+  const max = Math.max(...pairs.map(p => p[1])) || 1;
+  const fmt = (v) => Number(v).toLocaleString("en", { maximumFractionDigits: 2 });
+  const short = (t) => { const s = String(t); return s.length > 24 ? s.slice(0, 23) + "…" : s; };
+  const title = `${esc(result.columns[spec.value])} by ${esc(result.columns[spec.label])}`;
+  if (spec.type === "bar") {
+    const row = 26, labelW = 190, barW = 380, h = pairs.length * row + 8;
+    const bars = pairs.map(([label, v], i) => {
+      const y = 4 + i * row, w = Math.max(2, (v / max) * barW);
+      return `<text x="${labelW - 8}" y="${y + 16}" text-anchor="end">`
+        + `<title>${esc(label)}</title>${esc(short(label))}</text>`
+        + `<rect class="bar-fill" x="${labelW}" y="${y + 4}" width="${w}" height="${row - 9}" rx="3"/>`
+        + `<text class="muted" x="${labelW + w + 6}" y="${y + 16}">${esc(fmt(v))}</text>`;
+    }).join("");
+    return `<svg class="chart" viewBox="0 0 660 ${h}" role="img" aria-label="${title}">${bars}</svg>`;
+  }
+  const W = 660, H = 230, left = 56, right = 16, top = 14, bottom = 34;
+  const x = (i) => left + (i * (W - left - right)) / (pairs.length - 1);
+  const y = (v) => top + (1 - v / max) * (H - top - bottom);
+  const points = pairs.map((p, i) => `${x(i).toFixed(1)},${y(p[1]).toFixed(1)}`).join(" ");
+  const every = Math.ceil(pairs.length / 8);
+  const xLabels = pairs.map((p, i) => i % every ? "" :
+    `<text class="muted" x="${x(i)}" y="${H - 12}" text-anchor="middle">${esc(short(p[0]))}</text>`).join("");
+  const dots = pairs.map((p, i) => `<circle class="dot" cx="${x(i)}" cy="${y(p[1])}" r="3">`
+    + `<title>${esc(p[0])}: ${esc(fmt(p[1]))}</title></circle>`).join("");
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${title}">`
+    + `<line class="axis" x1="${left}" y1="${y(0)}" x2="${W - right}" y2="${y(0)}"/>`
+    + `<text class="muted" x="${left - 8}" y="${y(max) + 4}" text-anchor="end">${esc(fmt(max))}</text>`
+    + `<text class="muted" x="${left - 8}" y="${y(0) + 4}" text-anchor="end">0</text>`
+    + `<polyline class="line" points="${points}"/>${dots}${xLabels}</svg>`;
+}
+
 document.getElementById("form").onsubmit = async (e) => {
   e.preventDefault();
+  closeSuggestions();
   const question = qEl.value.trim();
   if (!question) return;
 
@@ -225,10 +388,6 @@ function render(d) {
   html += `<div class="card"><h2>Question · ${esc(LANGUAGE[d.script] || d.script)}</h2>
     <div${d.rtl ? ' class="rtl"' : ""}>${esc(d.question)}</div></div>`;
 
-  if (d.sql) {
-    html += `<div class="card"><h2>Generated SQL</h2><pre>${esc(d.sql)}</pre></div>`;
-  }
-
   if (d.violations && d.violations.length) {
     html += `<div class="card"><h2>Blocked by guardrails</h2>`;
     for (const v of d.violations) {
@@ -238,22 +397,43 @@ function render(d) {
       the database. Nothing was executed.</p></div>`;
   }
 
-  if (d.warnings && d.warnings.length) {
-    html += `<div class="card"><h2>Notes</h2>`;
-    for (const w of d.warnings) html += `<div class="note">${esc(w)}</div>`;
-    html += `</div>`;
+  // The answer first, for someone who doesn't read SQL; how it was produced comes after.
+  if (d.summary) {
+    html += `<div class="card"><h2>Answer</h2>
+      <div class="answer" dir="auto">${esc(d.summary)}</div></div>`;
+  }
+
+  if (d.result && d.chart) {
+    const svg = chartSVG(d.result, d.chart);
+    if (svg) html += `<div class="card"><h2>Chart</h2>${svg}</div>`;
   }
 
   if (d.result) {
     const cols = d.result.columns, rows = d.result.rows;
-    html += `<div class="card"><h2>Result · ${rows.length} rows</h2><div class="scroll"><table><thead><tr>`;
+    html += `<div class="card"><h2>Result · ${rows.length} rows</h2>
+      <div class="actions"><button type="button" id="csv">Download CSV</button>
+      <button type="button" id="copy">Copy</button></div>
+      <div class="scroll"><table><thead><tr>`;
     for (const c of cols) html += `<th>${esc(c)}</th>`;
     html += `</tr></thead><tbody>`;
     for (const r of rows.slice(0, 50)) {
-      html += "<tr>" + r.map(v => `<td>${esc(v === null ? "∅" : v)}</td>`).join("") + "</tr>";
+      html += "<tr>" + r.map(v => `<td dir="auto">${esc(v === null ? "∅" : v)}</td>`).join("") + "</tr>";
     }
     html += `</tbody></table></div>`;
+    if (rows.length > 50) {
+      html += `<p class="meta" style="margin-bottom:0">Showing 50 of ${rows.length} rows; the CSV has all of them.</p>`;
+    }
     if (d.result.truncated) html += `<p class="note" style="margin-bottom:0">Truncated.</p>`;
+    html += `</div>`;
+  }
+
+  if (d.sql) {
+    html += `<div class="card"><h2>Generated SQL</h2><pre>${esc(d.sql)}</pre></div>`;
+  }
+
+  if (d.warnings && d.warnings.length) {
+    html += `<div class="card"><h2>Notes</h2>`;
+    for (const w of d.warnings) html += `<div class="note">${esc(w)}</div>`;
     html += `</div>`;
   }
 
@@ -287,6 +467,11 @@ function render(d) {
   html += `<p class="meta">${esc(d.provider)}/${esc(d.model)} · ${d.latency_ms} ms`
     + `${repaired}${cached}</p>`;
   out.innerHTML = html;
+  if (d.result) {
+    document.getElementById("csv").onclick = () => downloadCSV(d.result);
+    const copy = document.getElementById("copy");
+    copy.onclick = () => copyAnswer(d, copy);
+  }
 }
 </script>
 </body>

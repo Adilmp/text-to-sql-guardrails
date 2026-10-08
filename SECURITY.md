@@ -38,6 +38,8 @@ first.
 | Repair | Every repaired query re-validated and re-sandboxed; rules from all attempts recorded (`rules_seen`) | A repair hiding what the model first tried from the telemetry and the adversarial metric |
 | Grounding | Repair hints built from database values pass the same content allowlist; lookups are syntax trees run through the sandboxed executor | Stored injection through value suggestions (§2.2) |
 | Cache | Every cached query is validated again before it runs, and evicted if it fails; only confident, unrepaired answers are stored | SQL planted in the cache file; one bad answer becoming sticky for every user |
+| Suggestions | Offered only from the curated question list, never from cached questions | One user's questions shown to the next |
+| CSV export | Text cells starting with `= + - @` are prefixed with `'` | CSV/formula injection through stored values (customer names) |
 | Runtime | Read-only URI (`file:...?mode=ro`) | Writes, even with the validator bypassed |
 | Runtime | `PRAGMA query_only = ON` | Writes on a connection that opened read-write |
 | Runtime | Extension loading disabled | `load_extension` if the allowlist were bypassed |
