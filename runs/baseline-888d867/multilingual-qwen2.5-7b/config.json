@@ -2,7 +2,7 @@
   "settings": {
     "provider": "ollama",
     "ollama_host": "http://127.0.0.1:11434",
-    "ollama_model": "qwen2.5:0.5b",
+    "ollama_model": "qwen2.5:7b",
     "anthropic_model": "claude-sonnet-5",
     "request_timeout_s": 120.0,
     "max_retries": 2,
@@ -15,10 +15,11 @@
     "max_sql_chars": 8000,
     "db_path": "/mnt/data/mizan/data/gulf_logistics.sqlite",
     "log_dir": "/mnt/data/mizan/logs",
-    "run_dir": "/mnt/data/mizan/runs",
+    "run_dir": "/tmp/claude-1000/-mnt-data/e8aaf079-af21-446f-bf50-70b64ae84e16/scratchpad/baseline",
     "data_dir": "/mnt/data/mizan/data",
-    "log_level": "INFO"
+    "log_level": "WARNING"
   },
-  "suite": "bilingual",
-  "run_id": "bilingual-qwen2.5-0.5b"
+  "suite": "multilingual",
+  "run_id": "multilingual-qwen2.5-7b",
+  "fingerprint": "sha256:9007b3df5f998eb3"
 }

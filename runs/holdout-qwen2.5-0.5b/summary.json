@@ -1,0 +1,93 @@
+{
+  "model": "qwen2.5:0.5b",
+  "provider": "ollama",
+  "suite": "holdout",
+  "n": 24,
+  "correct": 0,
+  "accuracy": 0.0,
+  "blocked": 13,
+  "executed": 8,
+  "by_language": {
+    "ar": {
+      "n": 8,
+      "correct": 0
+    },
+    "en": {
+      "n": 8,
+      "correct": 0
+    },
+    "ur": {
+      "n": 8,
+      "correct": 0
+    }
+  },
+  "by_difficulty": {
+    "hard": {
+      "n": 21,
+      "correct": 0
+    },
+    "medium": {
+      "n": 3,
+      "correct": 0
+    }
+  },
+  "by_tag": {
+    "join": {
+      "n": 21,
+      "correct": 0
+    },
+    "aggregate": {
+      "n": 18,
+      "correct": 0
+    },
+    "order_by": {
+      "n": 6,
+      "correct": 0
+    },
+    "limit": {
+      "n": 9,
+      "correct": 0
+    },
+    "subquery": {
+      "n": 6,
+      "correct": 0
+    },
+    "multi_join": {
+      "n": 6,
+      "correct": 0
+    },
+    "price_trap": {
+      "n": 3,
+      "correct": 0
+    },
+    "date_logic": {
+      "n": 3,
+      "correct": 0
+    },
+    "boolean": {
+      "n": 3,
+      "correct": 0
+    },
+    "having": {
+      "n": 3,
+      "correct": 0
+    },
+    "offset": {
+      "n": 3,
+      "correct": 0
+    }
+  },
+  "rejection_rules": {
+    "unknown_column": 16,
+    "unknown_alias": 10
+  },
+  "mean_latency_ms": 4824.0,
+  "p50_latency_ms": 5669.6,
+  "p95_latency_ms": 8287.0,
+  "total_seconds": 115.8,
+  "correct_relaxed": 0,
+  "accuracy_relaxed": 0.0,
+  "repaired": 17,
+  "repaired_correct": 0,
+  "warmup_ms": 269.2
+}
