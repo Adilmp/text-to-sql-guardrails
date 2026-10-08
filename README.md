@@ -20,7 +20,7 @@ confidence score that explains its weakest point.
 | English / Arabic / Urdu | 18/20 · 17/20 · 16/20 on the development suite (Urdu is new; it scored 10/20 through the old Arabic path) |
 | Speed | 8 s median, 22 s p95 per question on a 6-core CPU; the ~3-minute one-off warm-up happens at startup |
 | Harmful statements executed | **0**: every answer to an adversarial prompt contained, across two models |
-| Tests | 343, all offline in ~10 s, run in CI on Python 3.10–3.12 (55 of them security tests) |
+| Tests | 369, all offline in ~10 s, run in CI on Python 3.10–3.12 (55 of them security tests) |
 
 ## The problem
 
@@ -140,6 +140,23 @@ every number, per language, per tag and per failure, generated from the run file
 - **Not measured:** the Spider benchmark (its databases aren't downloadable unattended), the
   Anthropic backend (no API key was available), dialectal Arabic and Roman Urdu.
 
+## Repeated questions: the answer cache
+
+The server answers a repeated question from a cache in milliseconds instead of seconds. "Repeated"
+is defined narrowly on purpose: the same question after removing case, punctuation, polite
+filler and Arabic/Urdu spelling or digit variants. "How many orders were delivered late?" and
+"please, how many orders were delivered LATE" share an entry; "…delivered early?" does not.
+
+Matching *similar* questions by embedding was measured first and rejected: the local embedding
+model scores "customers in Dubai" against "customers in Riyadh" at 1.000 and "late most often"
+against "late least often" at 0.995, higher than genuine rewordings ([D40](DECISIONS.md)). A
+cache that confuses those serves confident wrong answers.
+
+The cache stores the validated SQL, not the rows: a hit is validated again and re-run, so it is
+never staler than the data, and SQL planted in the cache file never runs. Only confident,
+unrepaired answers are stored, and entries stop matching when the prompt, schema or model
+changes. The eval never goes through it. `MIZAN_CACHE=off` disables it.
+
 ## Catching regressions
 
 Change a prompt, a model or a guardrail and the headline accuracy can stay the same while
@@ -241,15 +258,20 @@ MIZAN_PROVIDER=mock uv run mizan ask "drop the orders table"
 | `uv run mizan eval --suite both --resume` | Development suite + adversarial suite; results land in `runs/` |
 | `uv run mizan eval --suite holdout` | The held-out suite, on purpose ([D31](DECISIONS.md)) |
 | `uv run mizan health` | Check the database and the model backend |
-| `uv run pytest` | 343 tests, offline, about 10 seconds |
+| `uv run pytest` | 369 tests, offline, about 10 seconds |
 
 Settings come from `MIZAN_*` environment variables (`MIZAN_PROVIDER`, `MIZAN_OLLAMA_MODEL`,
 `MIZAN_MAX_REPAIRS`, `MIZAN_OLLAMA_KEEP_ALIVE`, `MIZAN_MAX_ROWS`, …); see
-`src/mizan/config.py`.
+`src/mizan/config.py`. The server's answer cache has its own: `MIZAN_CACHE` (`on`/`off`) and
+`MIZAN_CACHE_PATH` (default `.cache/answers.sqlite`).
+
+**First start on a CPU:** the server loads the model and reads its ~2,900-token prompt once, in
+the background (3–5 minutes on a 6-core CPU); the page says "warming up" until it is done, and
+the model then stays loaded for as long as the server runs.
 
 ## Design decisions
 
-39 decisions are written up in [DECISIONS.md](DECISIONS.md). The most important:
+40 decisions are written up in [DECISIONS.md](DECISIONS.md). The most important:
 
 - **Parse, never regex:** safety is decided on a syntax tree (D1), with a function allowlist that
   fails closed (D3) and names read the way SQLite will see them (D2).
@@ -282,8 +304,8 @@ Settings come from `MIZAN_*` environment variables (`MIZAN_PROVIDER`, `MIZAN_OLL
 │   ├── providers/       # Ollama, Anthropic, mock behind one interface
 │   ├── eval/            # suites (dev, held-out, adversarial), metrics, durable runner, regression gate
 │   ├── db/              # synthetic database builder, Spider loader
-│   └── api.py, cli.py, config.py, logging.py, errors.py
-├── tests/               # 343 tests, including tests/test_security.py and tests/test_repair.py
+│   └── api.py, cache.py, cli.py, config.py, logging.py, errors.py
+├── tests/               # 369 tests, including tests/test_security.py, tests/test_repair.py and tests/test_cache.py
 ├── scripts/             # run_eval.py, rescore.py, report.py, regression_gate.py
 ├── runs/                # raw eval results (the gate's baselines) and the before-this-change baseline
 ├── regression-gate.json # what the regression gate tolerates
@@ -296,7 +318,7 @@ Settings come from `MIZAN_*` environment variables (`MIZAN_PROVIDER`, `MIZAN_OLL
 
 | | |
 |---|---|
-| [DECISIONS.md](DECISIONS.md) | Why every choice was made (39 decisions) |
+| [DECISIONS.md](DECISIONS.md) | Why every choice was made (40 decisions) |
 | [SECURITY.md](SECURITY.md) | Threat model, controls, three vulnerabilities found by testing, known limits |
 | [docs/results.md](docs/results.md) | Every measured number, per model, per language, per tag, per failure |
 

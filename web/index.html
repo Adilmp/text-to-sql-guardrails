@@ -120,22 +120,40 @@ const out = document.getElementById("out");
 const qEl = document.getElementById("q");
 const goEl = document.getElementById("go");
 
-// Announce which backend is serving. On the mock provider the SQL comes from a fixture
-// table, not from a model, and saying so up front is the difference between a demo and a
-// magic trick.
-fetch("/api/health").then(r => r.json()).then(h => {
-  const b = document.getElementById("banner");
-  b.classList.remove("hidden");
+// Announce which backend is serving, and whether it is ready. On the mock provider the SQL
+// comes from a fixture table, not from a model, and saying so up front is the difference
+// between a demo and a magic trick. On a live model the server reads its prompt once at
+// startup (minutes on a CPU); saying "warming up" beats a counter that looks like a hang.
+const banner = document.getElementById("banner");
+function showHealth(h) {
+  banner.classList.remove("hidden");
   if (h.provider === "mock") {
-    b.textContent = "Mock backend — SQL comes from a fixture table, not a model. "
+    banner.textContent = "Mock backend — SQL comes from a fixture table, not a model. "
       + "The guardrails, schema validation and execution are real. "
       + "Run with MIZAN_PROVIDER=ollama for genuine generation.";
-  } else {
-    b.classList.add("live");
-    b.textContent = `Live backend: ${h.provider}/${h.model}. Answers take seconds once the `
-      + "model has read its prompt, which it does once at startup (about 3 minutes on a CPU).";
+    return;
   }
-}).catch(() => {});
+  const cached = h.cached_answers ? ` ${Number(h.cached_answers)} answers cached.` : "";
+  if (h.warmup === "failed") {
+    banner.classList.remove("live");
+    banner.textContent = `${h.provider}/${h.model} did not respond to the warm-up. `
+      + "Check that the model server is running (mizan health); questions will fail until it is.";
+  } else if (h.warming_up) {
+    banner.classList.remove("live");
+    banner.textContent = `Warming up ${h.provider}/${h.model}: the model is reading its `
+      + "prompt, once, after a cold start (a few minutes on a CPU). "
+      + "A question asked now waits for it.";
+    setTimeout(checkHealth, 5000);
+  } else {
+    banner.classList.add("live");
+    banner.textContent = `Ready: ${h.provider}/${h.model}. New questions take seconds; `
+      + `repeated ones come from the cache in milliseconds.${cached}`;
+  }
+}
+function checkHealth() {
+  fetch("/api/health").then(r => r.json()).then(showHealth).catch(() => {});
+}
+checkHealth();
 
 const examplesEl = document.getElementById("examples");
 for (const ex of EXAMPLES) {
@@ -191,6 +209,7 @@ document.getElementById("form").onsubmit = async (e) => {
       return;
     }
     render(await res.json());
+    checkHealth();  // the cached-answer count may have changed
   } catch (err) {
     out.innerHTML = `<div class="card"><h2>Network error</h2>
       <div class="violation">${esc(err.message)}</div></div>`;
@@ -261,7 +280,12 @@ function render(d) {
     calibrated probability.</p></div>`;
 
   const repaired = d.repairs ? ` · repaired ${Number(d.repairs)}×` : "";
-  html += `<p class="meta">${esc(d.provider)}/${esc(d.model)} · ${d.latency_ms} ms${repaired}</p>`;
+  const cached = d.cache && d.cache.hit
+    ? ` · <strong>from cache</strong> (same question as “${esc(d.cache.matched)}”; `
+      + `SQL validated and run again)`
+    : "";
+  html += `<p class="meta">${esc(d.provider)}/${esc(d.model)} · ${d.latency_ms} ms`
+    + `${repaired}${cached}</p>`;
   out.innerHTML = html;
 }
 </script>

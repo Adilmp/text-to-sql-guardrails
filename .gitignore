@@ -26,6 +26,7 @@ htmlcov/
 
 # Generated artifacts
 logs/
+.cache/
 data/*.sqlite
 data/spider/
 

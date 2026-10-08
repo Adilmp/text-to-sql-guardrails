@@ -17,16 +17,19 @@ still return real error codes.
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from .cache import AnswerCache, CachedTextToSQL, CacheSettings
 from .config import Settings
 from .errors import MizanError, ProviderError
 from .generate import TextToSQL
@@ -60,36 +63,64 @@ class AskResponse(BaseModel):
     latency_ms: float
     #: How many times the model was asked to fix its own query before this answer.
     repairs: int = 0
+    #: Set when the answer came from the cache: which earlier question it matched.
+    cache: dict[str, Any] | None = None
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, cache_settings: CacheSettings | None = None
+) -> FastAPI:
     """Application factory.
 
     A factory rather than a module-level ``app`` so tests can build an instance with
     injected settings (a temporary database, the mock provider) without touching the
     environment.
     """
-    cfg = settings or Settings.from_env()
+    cfg = serving_settings(settings or Settings.from_env())
+    if cache_settings is None:
+        # Injected settings mean a test or an embedding app: no cache file unless asked for.
+        cache_settings = CacheSettings.from_env() if settings is None else CacheSettings(False)
     cfg.ensure_dirs()
     configure(cfg.log_level, cfg.log_dir, console=False)
 
-    state: dict[str, Any] = {}
+    state: dict[str, Any] = {"warmup": "running"}
+    ready = threading.Event()
+
+    def warm_up() -> None:
+        try:
+            ok = state["engine"].warm_up() is not None
+            state["warmup"] = "ready" if ok else "failed"
+        except Exception:  # never let the warm-up thread die silently with "running"
+            state["warmup"] = "failed"
+            raise
+        finally:
+            ready.set()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         state["catalog"] = load_catalog(cfg.db_path)
         state["provider"] = build_provider(cfg)
         state["engine"] = TextToSQL(state["catalog"], state["provider"], cfg)
+        cache = AnswerCache(cache_settings.path) if cache_settings.enabled else None
+        state["cache"] = cache
+        state["served"] = CachedTextToSQL(state["engine"], cache, cache_settings)
         if state["provider"].name != "mock":
             # Read the prompt into the model's cache now, in the background, so the first
-            # visitor doesn't wait ~2 minutes on a CPU. A request that arrives first simply
-            # queues behind it in the model server.
-            threading.Thread(target=state["engine"].warm_up, daemon=True).start()
+            # visitor doesn't wait minutes on a CPU. A request that arrives first queues
+            # behind it in the model server; /api/health reports `warming_up` meanwhile.
+            threading.Thread(target=warm_up, daemon=True).start()
+        else:
+            state["warmup"] = "ready"
+            ready.set()
         logger.info(
             "api ready",
             extra={"provider": state["provider"].name, "model": state["provider"].model},
         )
         yield
+        if state["provider"].name == "ollama" and cfg.ollama_keep_alive == KEEP_LOADED:
+            _release_model(cfg)
+        if cache is not None:
+            cache.close()
         state.clear()
 
     app = FastAPI(title="Text-to-SQL Guardrails", version="0.1.0", lifespan=lifespan)
@@ -139,7 +170,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
         provider = state.get("provider")
+        served: CachedTextToSQL | None = state.get("served")
+        cache = state.get("cache")
         return {
+            "warming_up": not ready.is_set(),
+            # "ready", "running" or "failed": a warm-up that failed is not readiness.
+            "warmup": state.get("warmup"),
+            "cached_answers": cache.count(served.context) if cache and served else None,
             "ok": cfg.db_path.exists() and provider is not None,
             "database": str(cfg.db_path),
             "provider": provider.name if provider else None,
@@ -168,17 +205,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # included, until the model replied.
     @app.post("/api/ask", response_model=AskResponse)
     def ask(request: AskRequest) -> AskResponse:
-        engine: TextToSQL = state["engine"]
-        if request.samples > 1:
-            engine = TextToSQL(
-                state["catalog"],
-                state["provider"],
-                cfg.model_copy(update={"self_consistency_n": request.samples}),
-            )
+        served: CachedTextToSQL = state["served"]
+        hit = None
 
         with run_context() as run_id:
             try:
-                answer = engine.ask(request.question)
+                if request.samples > 1:
+                    # Several samples are a request for the model's own agreement, so they
+                    # bypass the cache.
+                    engine = TextToSQL(
+                        state["catalog"],
+                        state["provider"],
+                        cfg.model_copy(update={"self_consistency_n": request.samples}),
+                    )
+                    answer = engine.ask(request.question)
+                else:
+                    answer, hit = served.ask(request.question)
             except ProviderError as exc:
                 logger.error("provider failure", extra={"error": str(exc), "run_id": run_id})
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -206,6 +248,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             model=answer.model,
             latency_ms=round(answer.latency_ms, 1),
             repairs=answer.repairs,
+            cache=hit.to_dict() if hit else None,
         )
 
     return app
+
+
+#: Ollama's "keep loaded until told otherwise". A negative duration; the bare string "-1"
+#: is rejected by Ollama ("missing unit in duration"), which is how this constant came about.
+KEEP_LOADED = "-1m"
+
+
+def serving_settings(cfg: Settings) -> Settings:
+    """Settings for a long-running server: keep the model loaded while it runs.
+
+    With Ollama's default the model unloads after idle minutes, and the next visitor pays the
+    whole cold start again: loading the model and reading the prompt, minutes on a CPU
+    (D37). An explicit ``MIZAN_OLLAMA_KEEP_ALIVE`` always wins.
+    """
+    if cfg.provider == "ollama" and "MIZAN_OLLAMA_KEEP_ALIVE" not in os.environ:
+        return cfg.model_copy(update={"ollama_keep_alive": KEEP_LOADED})
+    return cfg
+
+
+def _release_model(cfg: Settings) -> None:
+    """On shutdown, hand the model back to Ollama's normal idle timeout.
+
+    Not an immediate unload: a server restarted within the half hour (as ``--reload`` does on
+    every edit) finds the model and its processed prompt still warm.
+    """
+    try:
+        httpx.post(
+            f"{cfg.ollama_host.rstrip('/')}/api/generate",
+            json={"model": cfg.ollama_model, "keep_alive": "30m"},
+            timeout=5.0,
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("could not release the model", extra={"error": str(exc)})
