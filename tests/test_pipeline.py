@@ -22,15 +22,27 @@ class TestPipeline:
         assert answer.result is not None
         assert answer.confidence.band in {"high", "medium"}
 
-    def test_arabic_question_routes_to_arabic_prompt(
+    def test_arabic_question_is_detected_and_shares_the_system_prompt(
         self, catalog: Catalog, settings: Settings
     ) -> None:
         provider = MockProvider()
-        answer = TextToSQL(catalog, provider, settings).ask("كم عدد الطلبات؟")  # "how many orders?"
+        engine = TextToSQL(catalog, provider, settings)
+        answer = engine.ask("كم عدد الطلبات؟")  # "how many orders?"
+        engine.ask("how many orders are there?")
         assert answer.ok
         assert answer.script is Script.ARABIC
-        # The Arabic rule block must actually have been used.
-        assert "القواعد" in provider.calls[0].system
+        # Same system prompt for both languages: the model server's prompt cache depends on it.
+        assert provider.calls[0].system == provider.calls[1].system
+        assert "الطلبات" in provider.calls[0].system  # Arabic aliases are in it
+
+    def test_urdu_question_is_detected_and_answered(
+        self, catalog: Catalog, settings: Settings
+    ) -> None:
+        provider = MockProvider()
+        answer = TextToSQL(catalog, provider, settings).ask("کتنے آرڈر ابھی تک ڈیلیور نہیں ہوئے؟")
+        assert answer.ok
+        assert answer.script is Script.URDU
+        assert answer.script.is_rtl
 
     def test_arabic_normalization_reaches_the_model(
         self, catalog: Catalog, settings: Settings

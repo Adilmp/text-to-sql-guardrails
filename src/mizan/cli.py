@@ -18,7 +18,7 @@ from rich.table import Table
 from .config import Settings
 from .db.build_synthetic import build as build_db
 from .errors import MizanError
-from .eval import build_suite, injection_suite, run_suite
+from .eval import SUITES, get_suite, run_suite
 from .generate import TextToSQL
 from .logging import configure, get_logger
 from .providers import build_provider
@@ -27,7 +27,7 @@ from .schema import load_catalog
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Bilingual Arabic/English Text-to-SQL with AST-level guardrails.",
+    help="English, Arabic and Urdu Text-to-SQL with AST-level guardrails.",
 )
 console = Console()
 logger = get_logger("cli")
@@ -84,17 +84,28 @@ def cmd_build_db(
 
 @app.command("schema")
 def cmd_schema(
-    arabic: bool = typer.Option(True, "--arabic/--no-arabic", help="Include Arabic aliases"),
+    aliases: bool = typer.Option(
+        True, "--aliases/--no-aliases", help="Include Arabic and Urdu aliases"
+    ),
+    full: bool = typer.Option(
+        False, "--full", help="Print the whole system prompt the model gets, rules included"
+    ),
 ) -> None:
     """Print the schema card exactly as the model sees it."""
+    from .generate.prompt import build_system_prompt
+
     settings = _settings()
     catalog = load_catalog(settings.db_path)
-    console.print(Syntax(catalog.to_prompt(include_arabic=arabic), "sql", theme="ansi_dark"))
+    if full:
+        console.print(build_system_prompt(catalog), markup=False, highlight=False)
+        return
+    card = catalog.to_prompt(languages=("ar", "ur") if aliases else ())
+    console.print(Syntax(card, "sql", theme="ansi_dark"))
 
 
 @app.command("ask")
 def cmd_ask(
-    question: str = typer.Argument(..., help="Question in Arabic or English"),
+    question: str = typer.Argument(..., help="Question in English, Arabic or Urdu"),
     provider: str | None = typer.Option(None, help="ollama | anthropic | mock"),
     model: str | None = typer.Option(None, help="Model name"),
     samples: int = typer.Option(1, "--samples", "-n", help="Self-consistency samples"),
@@ -154,23 +165,34 @@ def cmd_ask(
     )
     for warning in answer.guardrail.warnings if answer.guardrail else []:
         console.print(f"[yellow]note:[/yellow] {warning}")
-    console.print(f"[dim]{answer.provider}/{answer.model} · {answer.latency_ms:.0f}ms[/dim]")
+    repaired = f" · repaired {answer.repairs}x" if answer.repairs else ""
+    console.print(
+        f"[dim]{answer.provider}/{answer.model} · {answer.latency_ms:.0f}ms{repaired}[/dim]"
+    )
 
 
 @app.command("eval")
 def cmd_eval(
     provider: str | None = typer.Option(None, help="ollama | anthropic | mock"),
     model: str | None = typer.Option(None, help="Model name"),
-    suite: str = typer.Option("bilingual", help="bilingual | injection | both"),
+    suite: str = typer.Option(
+        "multilingual", help="multilingual | holdout | injection | both | all"
+    ),
     limit: int | None = typer.Option(None, help="Only run the first N cases"),
     resume: bool = typer.Option(False, "--resume", help="Skip cases already recorded"),
 ) -> None:
     """Run an evaluation suite and write results to runs/."""
     settings = _settings(provider, model)
-    suites = ["bilingual", "injection"] if suite == "both" else [suite]
+    # "both" predates the held-out suite and keeps its old meaning (D31: the held-out suite
+    # is run on purpose, not by habit).
+    groups = {"both": ["multilingual", "injection"], "all": list(SUITES)}
+    suites = groups.get(suite, [suite])
+    unknown = [name for name in suites if name not in SUITES]
+    if unknown:
+        raise typer.BadParameter(f"unknown suite {unknown[0]!r}", param_hint="--suite")
 
     for name in suites:
-        cases = injection_suite() if name == "injection" else build_suite()
+        cases = get_suite(name)
         # `--resume` only means anything if repeated invocations land in the *same* run
         # directory. Without an explicit run_id, `run_suite` mints a fresh timestamped one
         # every time, so resume would read an empty directory, find nothing to skip, and
@@ -194,8 +216,16 @@ def cmd_eval(
         table.add_row("cases", str(summary.n))
         table.add_row("correct", str(summary.correct))
         table.add_row("accuracy", f"{summary.accuracy:.1%}")
+        if summary.correct_relaxed is not None and summary.n:
+            table.add_row(
+                "accuracy (extra columns allowed)", f"{summary.correct_relaxed / summary.n:.1%}"
+            )
         table.add_row("blocked", str(summary.blocked))
-        table.add_row("mean latency", f"{summary.mean_latency_ms:.0f}ms")
+        table.add_row("repaired (correct)", f"{summary.repaired} ({summary.repaired_correct})")
+        table.add_row(
+            "latency p50 / p95",
+            f"{summary.p50_latency_ms / 1000:.1f}s / {summary.p95_latency_ms / 1000:.1f}s",
+        )
         console.print(table)
 
         if summary.by_language:

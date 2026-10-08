@@ -28,9 +28,12 @@ from .base import Completion, Provider
 @dataclass
 class RecordedCall:
     system: str
+    #: The newest user message (the question, or a repair request).
     user: str
     temperature: float
     max_tokens: int
+    #: Every message after the system prompt, oldest first.
+    messages: tuple[tuple[str, str], ...] = ()
 
 
 #: Question -> SQL. Keys are stored normalized; see ``_key``.
@@ -61,6 +64,7 @@ DEFAULT_FIXTURES: dict[str, str] = {
         "SELECT c.city, AVG(o.total_aed) AS avg_total FROM orders o "
         "JOIN customers c ON c.customer_id = o.customer_id GROUP BY c.city"
     ),
+    "کتنے آرڈر ابھی تک ڈیلیور نہیں ہوئے؟": "SELECT COUNT(*) FROM orders WHERE delivered_at IS NULL",
     # Deliberately unsafe responses, so the offline demo can exercise the rejection path.
     # A real model has to be talked into these; the mock just hands them over, which is
     # the point — what is being demonstrated is the guardrail, not the model's virtue.
@@ -100,9 +104,23 @@ class MockProvider(Provider):
         self.calls: list[RecordedCall] = []
 
     def _generate_once(
-        self, system: str, user: str, *, temperature: float, max_tokens: int
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
     ) -> Completion:
-        self.calls.append(RecordedCall(system, user, temperature, max_tokens))
+        user = messages[-1]["content"]
+        self.calls.append(
+            RecordedCall(
+                system,
+                user,
+                temperature,
+                max_tokens,
+                tuple((m["role"], m["content"]) for m in messages),
+            )
+        )
 
         if self.fail_with is not None:
             raise self.fail_with
@@ -112,7 +130,9 @@ class MockProvider(Provider):
                 raise ProviderResponseError("mock script exhausted", calls=len(self.calls))
             text = self.script.pop(0)
         else:
-            text = self._match_fixture(user)
+            # Fixtures answer the *question*, which is the first user message; a repair
+            # request is a later one and would never match.
+            text = self._match_fixture(messages[0]["content"])
 
         # A tiny sleep keeps latency numbers non-zero so that code formatting or dividing
         # by latency does not hit a surprising zero in tests.

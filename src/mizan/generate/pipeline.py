@@ -2,12 +2,23 @@
 
 Order of operations, and why it is this order
 ----------------------------------------------
-``detect script → clean → prompt → generate → extract → validate → execute → score``
+``detect language → clean → prompt → generate → extract → validate → execute → ground →
+(repair → extract → validate → execute → ground)* → score``
 
 Validation sits strictly between generation and execution. That is the whole architecture
 in one sentence: **nothing the model produces reaches the database without passing an AST
 check against the real catalog first.** Any design where the query is executed and the
 result is then inspected has already lost — by then a destructive statement has run.
+
+Repair
+------
+When the validator rejects a query for a fixable reason (an unknown column, an undefined
+alias, a function SQLite doesn't have), SQLite refuses it (an ambiguous column), or it
+filters on a text value that isn't in the data but has a close match, the model is shown
+its query and the problem and asked again, up to ``max_repairs`` times (``repair.py``).
+Queries that tried something dangerous are never repaired. A question that is answered
+correctly first time costs exactly what it did before; only broken answers pay for a
+second generation.
 
 Self-consistency
 ----------------
@@ -38,10 +49,12 @@ from ..guardrails import (
 from ..logging import get_logger
 from ..nl.detect import Script, detect_script
 from ..nl.normalize import clean_for_model
-from ..providers.base import Provider
+from ..providers.base import Provider, Turn
 from ..schema.catalog import Catalog
 from ..validate.confidence import Confidence, rejected, score_answer
+from ..validate.grounding import GroundingIssue, check_values
 from .prompt import build_system_prompt, build_user_prompt
+from .repair import Problem, diagnose
 
 logger = get_logger("pipeline")
 
@@ -55,10 +68,22 @@ class Candidate:
     guardrail: GuardrailReport
     result: QueryResult | None = None
     error: str | None = None
+    #: Text values the query filters on that aren't in the data (see validate/grounding.py).
+    grounding: list[GroundingIssue] = field(default_factory=list)
 
     @property
     def usable(self) -> bool:
         return self.guardrail.ok and self.result is not None
+
+    @property
+    def rank(self) -> int:
+        """How good this candidate is, ignoring correctness we can't see: higher is better.
+
+        Ran and grounded > ran with an ungrounded value > failed in SQLite > rejected.
+        """
+        if not self.usable:
+            return 1 if self.guardrail.ok else 0
+        return 2 if self.grounding else 3
 
 
 @dataclass
@@ -85,6 +110,11 @@ class Answer:
     #: The model's reply exactly as received, before extraction. Kept so an answer can be
     #: audited later: what the model *said*, not just what was run.
     raw_output: str | None = None
+    #: How many times the model was asked to fix its own query (see ``_repair``).
+    repairs: int = 0
+    #: Every guardrail rule that fired on any attempt, in order, including attempts that a
+    #: repair replaced. Telemetry must not lose what the model first tried.
+    rules_seen: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -107,11 +137,13 @@ class Answer:
             "agreement": self.agreement,
             "n_candidates": len(self.candidates),
             "raw_output": self.raw_output,
+            "repairs": self.repairs,
+            "rules_seen": list(self.rules_seen),
         }
 
 
 class TextToSQL:
-    """Orchestrates generation, validation and execution."""
+    """Orchestrates generation, validation, execution and repair."""
 
     def __init__(
         self,
@@ -126,6 +158,33 @@ class TextToSQL:
         self.policy = policy or GuardrailPolicy(
             max_rows=settings.max_rows, max_sql_chars=settings.max_sql_chars
         )
+        # Built once: it is identical for every question (prompt.py), which is what lets
+        # the backend's prompt cache serve every request after the first.
+        self.system_prompt = build_system_prompt(catalog)
+
+    def warm_up(self) -> float | None:
+        """Make the backend read the system prompt now, so the first user doesn't wait.
+
+        On a CPU the first request pays for loading the model and reading the whole prompt
+        (about two minutes for qwen2.5:7b). Everything after it reuses that work. Calling
+        this at startup moves the cost off the first user's request. Returns the time it
+        took in milliseconds, or ``None`` if the backend failed (logged, never raised: a
+        cold first answer is better than a server that won't start).
+        """
+        started = time.perf_counter()
+        try:
+            self.provider.generate(
+                self.system_prompt,
+                build_user_prompt("how many orders are there?"),
+                temperature=self.settings.temperature,
+                max_tokens=1,
+            )
+        except ProviderError as exc:
+            logger.warning("warm-up failed", extra={"error": str(exc)})
+            return None
+        elapsed = (time.perf_counter() - started) * 1000
+        logger.info("warm-up done", extra={"elapsed_ms": round(elapsed)})
+        return elapsed
 
     def ask(self, question: str) -> Answer:
         """Answer one natural-language question."""
@@ -136,8 +195,8 @@ class TextToSQL:
         if not cleaned:
             return self._failed(question, cleaned, script, started, "empty question")
 
-        system = build_system_prompt(self.catalog, script)
-        user = build_user_prompt(cleaned, script)
+        system = self.system_prompt
+        user = build_user_prompt(cleaned)
 
         logger.info(
             "question received",
@@ -153,6 +212,16 @@ class TextToSQL:
             return self._failed(question, cleaned, script, started, "model produced no output")
 
         chosen, agreement = self._choose(candidates)
+        rules_seen = [rule for c in candidates for rule in c.guardrail.rules_fired]
+        try:
+            chosen, attempts = self._repair(system, user, chosen)
+        except ProviderError as exc:
+            # The model server failed mid-repair. The first answer still stands; report it
+            # rather than throwing away a query that was (at worst) imperfect.
+            logger.warning("repair aborted", extra={"error": str(exc)})
+            attempts = []
+        rules_seen += [rule for c in attempts for rule in c.guardrail.rules_fired]
+        repairs = len(attempts)
         latency_ms = (time.perf_counter() - started) * 1000
 
         if not chosen.guardrail.ok:
@@ -168,9 +237,11 @@ class TextToSQL:
                 model=self.provider.model,
                 latency_ms=latency_ms,
                 error="; ".join(str(v) for v in chosen.guardrail.violations),
-                candidates=candidates,
+                candidates=candidates + attempts,
                 agreement=agreement,
                 raw_output=chosen.raw_text,
+                repairs=repairs,
+                rules_seen=tuple(rules_seen),
             )
 
         confidence = score_answer(
@@ -179,6 +250,8 @@ class TextToSQL:
             row_count=chosen.result.row_count if chosen.result else 0,
             agreement=agreement,
             rewrite_warnings=len(chosen.guardrail.warnings),
+            repairs=repairs,
+            ungrounded_values=len(chosen.grounding),
         )
 
         return Answer(
@@ -193,12 +266,35 @@ class TextToSQL:
             model=self.provider.model,
             latency_ms=latency_ms,
             error=chosen.error,
-            candidates=candidates,
+            candidates=candidates + attempts,
             agreement=agreement,
             raw_output=chosen.raw_text,
+            repairs=repairs,
+            rules_seen=tuple(rules_seen),
         )
 
     # ------------------------------------------------------------------ internals
+
+    def _evaluate(self, raw_text: str) -> Candidate:
+        """Extract, validate, execute and ground one model reply."""
+        sql = extract_sql(raw_text)
+        report = validate(sql, self.catalog, self.policy, raw_output=raw_text)
+        candidate = Candidate(raw_text=raw_text, sql=sql, guardrail=report)
+        if not report.ok:
+            return candidate
+        try:
+            candidate.result = execute(
+                report.sql,
+                self.settings.db_path,
+                max_rows=self.settings.max_rows,
+                timeout_s=self.settings.query_timeout_s,
+            )
+        except (ExecutionError, MizanError) as exc:
+            candidate.error = str(exc)
+            logger.info("candidate failed to execute", extra={"error": str(exc)})
+            return candidate
+        candidate.grounding = check_values(report.sql, self.catalog, self.settings.db_path)
+        return candidate
 
     def _sample(self, system: str, user: str) -> list[Candidate]:
         """Generate, extract, validate and execute each sample."""
@@ -216,23 +312,42 @@ class TextToSQL:
                 temperature=temperature,
                 max_tokens=self.settings.max_output_tokens,
             )
-            sql = extract_sql(completion.text)
-            report = validate(sql, self.catalog, self.policy, raw_output=completion.text)
-            candidate = Candidate(raw_text=completion.text, sql=sql, guardrail=report)
-
-            if report.ok:
-                try:
-                    candidate.result = execute(
-                        report.sql,
-                        self.settings.db_path,
-                        max_rows=self.settings.max_rows,
-                        timeout_s=self.settings.query_timeout_s,
-                    )
-                except (ExecutionError, MizanError) as exc:
-                    candidate.error = str(exc)
-                    logger.info("candidate failed to execute", extra={"error": str(exc)})
-            candidates.append(candidate)
+            candidates.append(self._evaluate(completion.text))
         return candidates
+
+    def _repair(
+        self, system: str, user: str, chosen: Candidate
+    ) -> tuple[Candidate, list[Candidate]]:
+        """Show the model what is wrong with its query, up to ``max_repairs`` times.
+
+        Returns the best candidate seen (by :attr:`Candidate.rank`, the later one on a tie)
+        and every repair attempt made. The conversation grows by one exchange per attempt
+        and starts with the unchanged system prompt and question, so a cached backend only
+        reads the new turns.
+        """
+        attempts: list[Candidate] = []
+        best, current = chosen, chosen
+        history: list[Turn] = [("user", user), ("assistant", chosen.raw_text)]
+        for _ in range(self.settings.max_repairs):
+            problem: Problem | None = diagnose(
+                current.guardrail, current.error, current.grounding, self.catalog, current.raw_text
+            )
+            if problem is None:
+                break
+            logger.info("repairing", extra={"kind": problem.kind, "attempt": len(attempts) + 1})
+            completion = self.provider.generate(
+                system,
+                problem.feedback,
+                history=history,
+                temperature=self.settings.temperature,
+                max_tokens=self.settings.max_output_tokens,
+            )
+            current = self._evaluate(completion.text)
+            attempts.append(current)
+            history += [("user", problem.feedback), ("assistant", completion.text)]
+            if current.rank >= best.rank:
+                best = current
+        return best, attempts
 
     def _choose(self, candidates: list[Candidate]) -> tuple[Candidate, float | None]:
         """Pick the candidate to return, and report how much the samples agreed.

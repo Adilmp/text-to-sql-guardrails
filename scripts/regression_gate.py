@@ -12,7 +12,8 @@ Usage:
     python scripts/regression_gate.py run qwen2.5:7b --promote    # both in one go
 
     # Compare any two run directories (for example a cheaper model against the baseline):
-    python scripts/regression_gate.py compare runs/bilingual-qwen2.5-7b runs/bilingual-qwen2.5-0.5b
+    python scripts/regression_gate.py compare \
+        runs/multilingual-qwen2.5-7b runs/multilingual-qwen2.5-0.5b
 
     # What CI runs. Needs no model: the evidence is the committed runs.
     python scripts/regression_gate.py ci --base-ref origin/main
@@ -46,6 +47,8 @@ from mizan.eval.gate import (  # noqa: E402
     Verdict,
     check_fresh,
     compare,
+    empty_run,
+    exists_at,
     load_run,
     render_markdown,
     worst,
@@ -54,7 +57,10 @@ from mizan.eval.gate import (  # noqa: E402
 RUNS = REPO_ROOT / "runs"
 CANDIDATES = REPO_ROOT / ".gate"
 RUN_FILES = ("config.json", "outcomes.jsonl", "summary.json")
-SUITES = ("bilingual", "injection")
+SUITES = ("multilingual", "injection", "holdout")
+#: What `run` evaluates unless told otherwise. The held-out suite is run on purpose, not by
+#: habit (DECISIONS.md D31).
+DEFAULT_SUITES = ("multilingual", "injection")
 #: What `git` prints for "no previous commit" in a push event (a branch's first push).
 NULL_SHA = "0" * 40
 
@@ -70,14 +76,14 @@ def main() -> int:
     p_run = sub.add_parser("run", help="run the eval into .gate/ and gate it against runs/")
     p_run.add_argument("model", help="model name, e.g. qwen2.5:7b")
     p_run.add_argument("--provider", default="ollama", choices=["ollama", "anthropic", "mock"])
-    p_run.add_argument("--suites", nargs="+", default=list(SUITES), choices=SUITES)
+    p_run.add_argument("--suites", nargs="+", default=list(DEFAULT_SUITES), choices=SUITES)
     p_run.add_argument("--resume", action="store_true", help="continue an interrupted run")
     p_run.add_argument("--promote", action="store_true", help="on PASS, replace the baseline")
 
     p_pro = sub.add_parser("promote", help="gate the runs in .gate/ again and, on PASS, promote")
     p_pro.add_argument("model", help="model name, e.g. qwen2.5:7b")
     p_pro.add_argument("--provider", default="ollama", choices=["ollama", "anthropic", "mock"])
-    p_pro.add_argument("--suites", nargs="+", default=list(SUITES), choices=SUITES)
+    p_pro.add_argument("--suites", nargs="+", default=list(DEFAULT_SUITES), choices=SUITES)
 
     p_cmp = sub.add_parser("compare", help="compare two run directories")
     p_cmp.add_argument("baseline", type=Path)
@@ -145,7 +151,7 @@ def _run_names(args: argparse.Namespace) -> list[str]:
 
 def cmd_run(args: argparse.Namespace, policy: Policy) -> tuple[list[str], Verdict]:
     """Run the eval into .gate/, compare each suite with its baseline, optionally promote."""
-    from mizan.eval import build_suite, injection_suite, run_suite
+    from mizan.eval import get_suite, run_suite
     from mizan.logging import configure
 
     settings = _settings(args)
@@ -155,7 +161,7 @@ def cmd_run(args: argparse.Namespace, policy: Policy) -> tuple[list[str], Verdic
         if not (RUNS / name / "outcomes.jsonl").exists():
             raise GateInputError(f"no baseline at runs/{name}: nothing to compare the run with")
         console.print(f"[bold]Running the {suite} suite with {args.model} into .gate/{name}[/]")
-        cases = build_suite() if suite == "bilingual" else injection_suite()
+        cases = get_suite(suite)
         run_suite(settings, cases=cases, suite_name=suite, run_id=name, resume=args.resume)
     return _gate_candidates(args, policy, promote_on_pass=args.promote)
 
@@ -235,10 +241,24 @@ def cmd_ci(base_ref: str, policy: Policy) -> tuple[list[str], Verdict]:
         sections.append("No base commit to compare with (first push of a branch): skipped.\n")
         return sections, worst(verdicts)
     for run_dir in run_dirs:
-        report = compare(load_run(run_dir, ref=base_ref), load_run(run_dir), policy)
+        candidate = load_run(run_dir)
+        report = compare(_baseline_at(run_dir, base_ref, policy, candidate), candidate, policy)
         sections.append(render_markdown(report))
         verdicts.append(report.verdict)
     return sections, worst(verdicts)
+
+
+def _baseline_at(run_dir: Path, base_ref: str, policy: Policy, candidate: Any) -> Any:
+    """The base branch's version of a gated run: same name, a declared older name, or none.
+
+    A run that exists under neither name on the base is new: every case in it is reported
+    as added and safety-checked, and nothing can count as a regression.
+    """
+    if exists_at(run_dir, base_ref):
+        return load_run(run_dir, ref=base_ref)
+    if (old := policy.renamed_runs.get(run_dir.name)) and exists_at(RUNS / old, base_ref):
+        return load_run(RUNS / old, ref=base_ref)
+    return empty_run(f"{base_ref}:(no {run_dir.name})", candidate.suite)
 
 
 def _step_summary() -> str | None:

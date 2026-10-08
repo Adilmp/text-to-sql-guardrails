@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from .executor import QueryResult, execute
-from .extract import extract_sql, find_stacked_statement, has_multiple_statements
+from .extract import (
+    extract_sql,
+    find_stacked_statement,
+    has_multiple_statements,
+    write_keywords,
+)
 from .policy import ALLOWED_FUNCTIONS, DENIED_FUNCTIONS, GuardrailPolicy
 from .validator import GuardrailReport, Violation, parse_sql, suggest_identifier, validate
 
@@ -21,4 +26,5 @@ __all__ = [
     "parse_sql",
     "suggest_identifier",
     "validate",
+    "write_keywords",
 ]

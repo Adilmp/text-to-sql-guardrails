@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,6 +35,9 @@ logger = get_logger("schema")
 #: Arabic letters (categorical values here are legitimately bilingual), spaces and a small
 #: set of separators. Quotes, semicolons, backslashes and newlines are excluded.
 _SAFE_SAMPLE_RE = re.compile(r"[\w \-./؀-ۿ]{1,40}", re.UNICODE)
+
+#: A value that starts like ``2025-01-31``: a date or timestamp, not a name.
+_DATE_LIKE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 #: Substrings that are never part of a category label but are meaningful to a SQL parser.
 #: ``-`` alone is legitimate (``in-transit``); ``--`` opens a comment.
@@ -61,7 +65,7 @@ def quote_identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def _is_prompt_safe(value: str) -> bool:
+def is_prompt_safe(value: str) -> bool:
     """Whether a database value may be rendered into the prompt.
 
     **Scope, stated precisely — this control stops *syntactic* injection only.**
@@ -103,6 +107,15 @@ class Column:
     #: Sample values, rendered into the prompt for low-cardinality categorical columns so
     #: the model emits ``'delivered'`` rather than guessing ``'DELIVERED'``.
     sample_values: tuple[str, ...] = ()
+    #: Urdu words or phrases for this column, e.g. ``مقدار`` for ``quantity``.
+    aliases_ur: tuple[str, ...] = ()
+    #: Whether every non-NULL value is distinct. Profiled for free-text columns only
+    #: (``None`` elsewhere): "names are not keys" is a fact about the *data* that no DDL
+    #: states, and grouping by a repeated name silently merges different people.
+    unique: bool | None = None
+
+    def aliases(self, language: str) -> tuple[str, ...]:
+        return {"ar": self.aliases_ar, "ur": self.aliases_ur}.get(language, ())
 
 
 @dataclass(frozen=True)
@@ -120,6 +133,10 @@ class Table:
     aliases_ar: tuple[str, ...] = ()
     foreign_keys: tuple[ForeignKey, ...] = ()
     row_count: int = 0
+    aliases_ur: tuple[str, ...] = ()
+
+    def aliases(self, language: str) -> tuple[str, ...]:
+        return {"ar": self.aliases_ar, "ur": self.aliases_ur}.get(language, ())
 
     @property
     def column_names(self) -> frozenset[str]:
@@ -130,12 +147,31 @@ class Table:
         return next((c for c in self.columns if c.name.lower() == lowered), None)
 
 
+@dataclass(frozen=True)
+class Definition:
+    """A business term and the SQL it means: a one-line semantic layer.
+
+    "Revenue" is the sum of the prices actually charged, not the catalogue price times the
+    quantity; "late" is a relationship between two columns. These are facts about this
+    database's *meaning*, so they live in the curated glossary next to the column
+    descriptions, not in prompt code: pointing the system at another database means
+    writing a new glossary, not editing Python.
+    """
+
+    term: str
+    sql: str
+    note: str = ""
+    aliases_ar: tuple[str, ...] = ()
+    aliases_ur: tuple[str, ...] = ()
+
+
 @dataclass
 class Catalog:
     """Everything the generator and the validator know about the database."""
 
     tables: dict[str, Table] = field(default_factory=dict)
     source_path: Path | None = None
+    definitions: tuple[Definition, ...] = ()
 
     # ------------------------------------------------------------------ lookups
 
@@ -163,7 +199,7 @@ class Catalog:
     # -------------------------------------------------------------- introspection
 
     @classmethod
-    def from_sqlite(cls, path: Path, *, sample_limit: int = 8) -> Catalog:
+    def from_sqlite(cls, path: Path, *, sample_limit: int = 12) -> Catalog:
         """Read structure from a SQLite file. Opens strictly read-only."""
         if not path.exists():
             raise SchemaError(f"database not found: {path}", path=str(path))
@@ -218,6 +254,11 @@ class Catalog:
         for row in info:
             col_name = row["name"]
             samples = Catalog._sample_values(conn, table, col_name, row["type"], sample_limit)
+            unique = (
+                None
+                if samples or row["pk"]
+                else Catalog._profile_unique(conn, table, col_name, row["type"])
+            )
             columns.append(
                 Column(
                     name=col_name,
@@ -225,9 +266,35 @@ class Catalog:
                     nullable=not row["notnull"],
                     primary_key=bool(row["pk"]),
                     sample_values=samples,
+                    unique=unique,
                 )
             )
         return tuple(columns)
+
+    @staticmethod
+    def _profile_unique(
+        conn: sqlite3.Connection, table: str, column: str, decl_type: str
+    ) -> bool | None:
+        """Whether a free-text column's values are all distinct; ``None`` if not profiled.
+
+        Only text columns that don't hold dates: "is this name a key?" is the question that
+        changes how a query must group, and "are these timestamps distinct?" is not.
+        """
+        if "CHAR" not in decl_type.upper() and "TEXT" not in decl_type.upper():
+            return None
+        col, tbl = quote_identifier(column), quote_identifier(table)
+        try:
+            first = conn.execute(
+                f"SELECT {col} AS v FROM {tbl} WHERE {col} IS NOT NULL LIMIT 1"  # noqa: S608
+            ).fetchone()
+            if first is None or _DATE_LIKE_RE.match(str(first["v"])):
+                return None
+            counts = conn.execute(
+                f"SELECT COUNT(DISTINCT {col}) AS d, COUNT({col}) AS n FROM {tbl}"  # noqa: S608
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+        return bool(counts["d"] == counts["n"])
 
     @staticmethod
     def _sample_values(
@@ -277,7 +344,7 @@ class Catalog:
         # `enterprise`. Quotes, semicolons, comment markers and newlines are not category
         # names, so the allowlist costs nothing legitimate. Consistent with the function
         # policy (see guardrails/policy.py), this fails closed on anything unrecognised.
-        if not all(_is_prompt_safe(v) for v in values):
+        if not all(is_prompt_safe(v) for v in values):
             # Drop the whole set, not just the offending value: showing a partial value
             # domain would mislead the model about what the column can contain. An
             # attacker can therefore suppress a helpful hint, which is a far smaller harm
@@ -298,20 +365,25 @@ class Catalog:
         a glossary that has drifted out of sync with the schema will silently degrade
         Arabic matching, and a loud failure at startup is far cheaper than debugging why
         ``الشحنات`` stopped resolving three weeks later.
+
+        All or nothing: everything is checked before anything is replaced, so a glossary that
+        fails validation leaves the catalog exactly as it was.
         """
         if not glossary_path.exists():
             logger.warning("no glossary found", extra={"path": str(glossary_path)})
             return
 
         data = json.loads(glossary_path.read_text(encoding="utf-8"))
+        definitions = tuple(self._load_definition(raw) for raw in data.get("definitions", []))
+        tables = dict(self.tables)
         for table_name, entry in data.get("tables", {}).items():
             key = table_name.lower()
-            if key not in self.tables:
+            if key not in tables:
                 raise SchemaError(
                     f"glossary references unknown table {table_name!r}",
                     known=sorted(self.tables),
                 )
-            existing = self.tables[key]
+            existing = tables[key]
             new_columns: list[Column] = []
             col_entries = entry.get("columns", {})
             for col in existing.columns:
@@ -325,6 +397,8 @@ class Catalog:
                         description=meta.get("description", col.description),
                         aliases_ar=tuple(meta.get("ar", ())),
                         sample_values=col.sample_values,
+                        aliases_ur=tuple(meta.get("ur", ())),
+                        unique=col.unique,
                     )
                 )
             unknown = set(col_entries) - {c.name for c in existing.columns}
@@ -333,44 +407,106 @@ class Catalog:
                     f"glossary references unknown columns on {table_name!r}",
                     columns=sorted(unknown),
                 )
-            self.tables[key] = Table(
+            tables[key] = Table(
                 name=existing.name,
                 columns=tuple(new_columns),
                 description=entry.get("description", existing.description),
                 aliases_ar=tuple(entry.get("ar", ())),
                 foreign_keys=existing.foreign_keys,
                 row_count=existing.row_count,
+                aliases_ur=tuple(entry.get("ur", ())),
             )
+        self.tables, self.definitions = tables, definitions
         logger.debug("glossary applied", extra={"path": str(glossary_path)})
 
-    def arabic_index(self) -> dict[str, tuple[str, str | None]]:
-        """Normalized Arabic alias -> (table, column or None).
+    def alias_index(
+        self, languages: Sequence[str] = ("ar", "ur")
+    ) -> dict[str, tuple[str, str | None]]:
+        """Normalized alias -> (table, column or None), for Arabic and Urdu aliases.
 
-        Built once and reused; the key is the *matching* normalization, so ``الكميّة`` with
-        a shadda and ``الكمية`` without one resolve to the same entry.
+        The key is the *matching* normalization, so ``الكميّة`` with a shadda and ``الكمية``
+        without one resolve to the same entry, as do Urdu words typed with Arabic letters.
         """
         index: dict[str, tuple[str, str | None]] = {}
-        for table in self.tables.values():
-            for alias in table.aliases_ar:
-                index[normalize_for_matching(alias)] = (table.name, None)
-            for column in table.columns:
-                for alias in column.aliases_ar:
-                    index[normalize_for_matching(alias)] = (table.name, column.name)
+        for language in languages:
+            for table in self.tables.values():
+                for alias in table.aliases(language):
+                    index[normalize_for_matching(alias)] = (table.name, None)
+                for column in table.columns:
+                    for alias in column.aliases(language):
+                        index[normalize_for_matching(alias)] = (table.name, column.name)
         return index
+
+    def _load_definition(self, raw: dict[str, object]) -> Definition:
+        """Parse one glossary definition, refusing any that names a column that isn't real.
+
+        Same reasoning as unknown glossary columns: a definition that drifted out of sync
+        with the schema would teach the model an identifier the validator then rejects.
+        """
+        import sqlglot
+        from sqlglot import exp
+
+        term, sql = str(raw.get("term", "")), str(raw.get("sql", ""))
+        try:
+            tree = sqlglot.parse_one(sql, dialect="sqlite")
+        except sqlglot.errors.ParseError as exc:
+            raise SchemaError(f"glossary definition {term!r} is not valid SQL", sql=sql) from exc
+        for column in tree.find_all(exp.Column):
+            if not column.table or not self.has_column(column.table, column.name):
+                raise SchemaError(
+                    f"glossary definition {term!r} references unknown column "
+                    f"{column.table or '?'}.{column.name}",
+                    hint="qualify every column in a definition with its table name",
+                )
+
+        def strings(key: str) -> tuple[str, ...]:
+            value = raw.get(key, ())
+            return tuple(str(v) for v in value) if isinstance(value, list) else ()
+
+        return Definition(
+            term=term,
+            sql=sql,
+            note=str(raw.get("note", "")),
+            aliases_ar=strings("ar"),
+            aliases_ur=strings("ur"),
+        )
+
+    def arabic_index(self) -> dict[str, tuple[str, str | None]]:
+        """Normalized Arabic alias -> (table, column or None)."""
+        return self.alias_index(("ar",))
+
+    def join_conditions(self) -> list[str]:
+        """Every foreign-key relationship as a ready-to-use join condition.
+
+        ``orders.customer_id = customers.customer_id``. The same facts are in the DDL's
+        ``FOREIGN KEY`` lines, but a model reading "which tables connect, and on what" from
+        one short list writes fewer joins on the wrong column (DECISIONS.md D34).
+        """
+        out: list[str] = []
+        for table in sorted(self.tables.values(), key=lambda t: t.name):
+            for fk in table.foreign_keys:
+                out.append(
+                    f"{table.name}.{fk.column} = {fk.references_table}.{fk.references_column}"
+                )
+        return out
 
     # ------------------------------------------------------------ prompt rendering
 
-    def to_prompt(self, *, include_arabic: bool, include_samples: bool = True) -> str:
+    def to_prompt(self, *, languages: Sequence[str] = (), include_samples: bool = True) -> str:
         """Render the schema card the model is shown.
 
         Format is CREATE-TABLE-like rather than JSON or prose. Models have seen orders of
         magnitude more DDL than any bespoke schema format during pretraining, so DDL is the
         representation they follow most reliably — and it costs fewer tokens than JSON.
+
+        ``languages`` picks which aliases to show (``"ar"``, ``"ur"``).
         """
         blocks: list[str] = []
         for table in sorted(self.tables.values(), key=lambda t: t.name):
             header = f"CREATE TABLE {table.name} ("
-            lines: list[str] = []
+            # (definition, comment) pairs: the comma separating definitions has to go
+            # *before* each comment, or it ends up inside it and the DDL stops being DDL.
+            lines: list[tuple[str, str]] = []
             for col in table.columns:
                 bits = [f"  {col.name} {col.type}"]
                 if col.primary_key:
@@ -382,26 +518,35 @@ class Catalog:
                 notes: list[str] = []
                 if col.description:
                     notes.append(col.description)
-                if include_arabic and col.aliases_ar:
-                    notes.append("ar: " + " / ".join(col.aliases_ar))
+                for language in languages:
+                    if aliases := col.aliases(language):
+                        notes.append(f"{language}: " + " / ".join(aliases))
                 if include_samples and col.sample_values:
                     notes.append("one of: " + ", ".join(repr(v) for v in col.sample_values))
-                if notes:
-                    line += f"  -- {'; '.join(notes)}"
-                lines.append(line)
+                if col.unique is False:
+                    notes.append("NOT unique")
+                lines.append((line, f"  -- {'; '.join(notes)}" if notes else ""))
 
             for fk in table.foreign_keys:
                 lines.append(
-                    f"  FOREIGN KEY ({fk.column}) "
-                    f"REFERENCES {fk.references_table}({fk.references_column})"
+                    (
+                        f"  FOREIGN KEY ({fk.column}) "
+                        f"REFERENCES {fk.references_table}({fk.references_column})",
+                        "",
+                    )
                 )
 
-            block = header + "\n" + ",\n".join(lines) + "\n);"
+            body = [
+                definition + ("," if i < len(lines) - 1 else "") + comment
+                for i, (definition, comment) in enumerate(lines)
+            ]
+            block = header + "\n" + "\n".join(body) + "\n);"
             comment_bits: list[str] = []
             if table.description:
                 comment_bits.append(table.description)
-            if include_arabic and table.aliases_ar:
-                comment_bits.append("ar: " + " / ".join(table.aliases_ar))
+            for language in languages:
+                if aliases := table.aliases(language):
+                    comment_bits.append(f"{language}: " + " / ".join(aliases))
             comment_bits.append(f"{table.row_count} rows")
             block = f"-- {'; '.join(comment_bits)}\n{block}"
             blocks.append(block)

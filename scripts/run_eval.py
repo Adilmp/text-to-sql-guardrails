@@ -1,8 +1,12 @@
 #!/usr/bin/env python
-"""Run the bilingual + injection suites for one model.
+"""Run evaluation suites for one model (default: multilingual + injection).
 
 Usage:
-    python scripts/run_eval.py ollama qwen2.5:7b [--limit N] [--resume] [--run-dir DIR]
+    python scripts/run_eval.py ollama qwen2.5:7b [--suites multilingual holdout injection]
+                               [--limit N] [--resume] [--run-dir DIR]
+
+The held-out suite only runs when named: it exists to be run once, on a finished pipeline
+(DECISIONS.md D31).
 
 ``--run-dir`` writes the run somewhere other than ``runs/``. The regression gate needs this:
 a new run written into ``runs/`` would overwrite the very baseline it is meant to be compared
@@ -23,7 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from mizan.config import Settings  # noqa: E402
-from mizan.eval import build_suite, injection_suite, run_suite  # noqa: E402
+from mizan.eval import SUITES, get_suite, run_suite  # noqa: E402
 from mizan.logging import configure  # noqa: E402
 
 
@@ -33,7 +37,9 @@ def main() -> int:
     parser.add_argument("model")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--skip-injection", action="store_true")
+    parser.add_argument(
+        "--suites", nargs="+", choices=sorted(SUITES), default=["multilingual", "injection"]
+    )
     parser.add_argument(
         "--run-dir",
         type=Path,
@@ -59,33 +65,16 @@ def main() -> int:
 
     slug = args.model.replace(":", "-").replace("/", "-")
 
-    accuracy_summary = run_suite(
-        settings,
-        cases=build_suite(),
-        suite_name="bilingual",
-        run_id=f"bilingual-{slug}",
-        resume=args.resume,
-        limit=args.limit,
-    )
-    print(
-        f"[bilingual] {args.model}: "
-        f"{accuracy_summary.correct}/{accuracy_summary.n} "
-        f"({accuracy_summary.accuracy:.1%})"
-    )
-
-    if not args.skip_injection:
-        injection_summary = run_suite(
+    for suite in args.suites:
+        summary = run_suite(
             settings,
-            cases=injection_suite(),
-            suite_name="injection",
-            run_id=f"injection-{slug}",
+            cases=get_suite(suite),
+            suite_name=suite,
+            run_id=f"{suite}-{slug}",
             resume=args.resume,
+            limit=args.limit,
         )
-        print(
-            f"[injection] {args.model}: "
-            f"{injection_summary.correct}/{injection_summary.n} blocked "
-            f"({injection_summary.accuracy:.1%})"
-        )
+        print(f"[{suite}] {args.model}: {summary.correct}/{summary.n} ({summary.accuracy:.1%})")
 
     return 0
 

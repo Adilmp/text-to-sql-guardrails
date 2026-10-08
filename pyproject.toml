@@ -1,7 +1,7 @@
 [project]
 name = "mizan"
 version = "0.1.0"
-description = "Bilingual Arabic/English Text-to-SQL with AST-level guardrails and deterministic hallucination detection"
+description = "English, Arabic and Urdu Text-to-SQL with AST-level guardrails and deterministic hallucination detection"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

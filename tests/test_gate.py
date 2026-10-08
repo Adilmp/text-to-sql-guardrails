@@ -115,6 +115,27 @@ class TestVerdicts:
         other = make_run(outcome("a"), outcome("b"), outcome("c", False), suite="injection")
         assert compare(BASE, other).verdict is Verdict.INCONCLUSIVE
 
+    def test_new_cases_are_reported_not_inconclusive(self) -> None:
+        """Adding questions to the suite must be able to pass CI. It used to be impossible:
+        a case with no baseline counted as missing evidence."""
+        candidate = make_run(outcome("a"), outcome("b"), outcome("c", False), outcome("d"))
+        report = compare(BASE, candidate)
+        assert report.verdict is Verdict.PASS
+        assert report.added == [("d", True)]
+        assert "New cases (no baseline yet): 1, of which 1 correct" in render_markdown(report)
+
+    def test_a_new_case_is_still_safety_checked(self) -> None:
+        leaked = outcome("d", blocked_rules=["write_operation"], executed=True)
+        report = compare(BASE, make_run(outcome("a"), outcome("b"), outcome("c", False), leaked))
+        assert report.verdict is Verdict.FAIL
+        assert [case for case, _ in report.safety] == ["d"]
+
+    def test_a_declared_suite_rename_is_comparable(self) -> None:
+        renamed = make_run(outcome("a"), outcome("b"), outcome("c", False), suite="multilingual")
+        assert compare(BASE, renamed).verdict is Verdict.INCONCLUSIVE  # undeclared
+        policy = Policy(renamed_suites={"multilingual": "bilingual"})
+        assert compare(BASE, renamed, policy).verdict is Verdict.PASS
+
     def test_worst_verdict_wins(self) -> None:
         assert worst([Verdict.PASS, Verdict.INCONCLUSIVE]) is Verdict.INCONCLUSIVE
         assert worst([Verdict.INCONCLUSIVE, Verdict.FAIL]) is Verdict.FAIL
@@ -175,9 +196,20 @@ class TestPolicy:
         path.write_text(json.dumps(data), encoding="utf-8")
         return path
 
+    def test_renames_load(self, tmp_path: Path) -> None:
+        path = tmp_path / "p.json"
+        path.write_text(
+            json.dumps({"renamed": {"runs": {"new-x": "old-x"}, "suites": {"new": "old"}}}),
+            encoding="utf-8",
+        )
+        policy = Policy.load(path)
+        assert policy.renamed_runs == {"new-x": "old-x"}
+        assert policy.same_suite("old", "new") and not policy.same_suite("new", "old")
+
     def test_repo_policy_loads(self) -> None:
         policy = Policy.load(REPO_ROOT / "regression-gate.json")
-        assert "bilingual-qwen2.5-7b" in policy.gated_runs
+        assert "multilingual-qwen2.5-7b" in policy.gated_runs
+        assert policy.renamed_runs["multilingual-qwen2.5-7b"] == "bilingual-qwen2.5-7b"
 
     def test_an_acceptance_needs_a_reason(self, tmp_path: Path) -> None:
         with pytest.raises(GateInputError):
@@ -343,16 +375,14 @@ class TestScript:
         assert "`b`" in report.read_text(encoding="utf-8")
 
 
-def test_cases_run_grouped_by_script_so_the_prompt_cache_is_reused(
-    db_path: Path, tmp_path: Path
-) -> None:
-    """The suite alternates en/ar; the runner must not, or every case re-reads the prompt."""
+def test_cases_run_grouped_by_language_in_suite_order(db_path: Path, tmp_path: Path) -> None:
+    """The suite interleaves en/ar/ur; the runner groups them, keeping suite order within each."""
     cases = build_suite()[:6]
-    assert [c.language for c in cases] == ["en", "ar"] * 3
+    assert [c.language for c in cases] == ["en", "ar", "ur"] * 2
     cfg = Settings.from_env(provider="mock", db_path=db_path, run_dir=tmp_path)
-    summary = run_suite(cfg, cases=cases, suite_name="bilingual", run_id="order")
+    summary = run_suite(cfg, cases=cases, suite_name="multilingual", run_id="order")
     lines = (tmp_path / "order" / "outcomes.jsonl").read_text(encoding="utf-8").splitlines()
     ran = [json.loads(line)["case_id"] for line in lines]
-    assert [case_id[:2] for case_id in ran] == ["ar"] * 3 + ["en"] * 3
-    assert ran[3:] == [c.id for c in cases if c.language == "en"]  # suite order kept
+    assert [case_id[:2] for case_id in ran] == ["ar"] * 2 + ["en"] * 2 + ["ur"] * 2
+    assert ran[2:4] == [c.id for c in cases if c.language == "en"]  # suite order kept
     assert summary.n == 6

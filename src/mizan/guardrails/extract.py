@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 
 import sqlglot
+from sqlglot import TokenType
 
 _FENCE_RE = re.compile(
     r"```[ \t]*(?:sql|sqlite|postgres|postgresql|mysql)?[ \t]*\r?\n(?P<body>.*?)(?:```|\Z)",
@@ -42,6 +43,30 @@ _STATEMENT_KEYWORDS = (
     "BEGIN|COMMIT|ROLLBACK|EXPLAIN|SET|USE"
 )
 _STATEMENT_START_RE = re.compile(rf"\b({_STATEMENT_KEYWORDS})\b", re.IGNORECASE)
+
+#: Token types that only occur in statements that write, change the schema, or reach outside
+#: the database: what an attack looks like, whether or not the rest of the text parses.
+#: ``COMMAND`` is sqlglot's catch-all for statements it doesn't model (``VACUUM``...), included
+#: so the check fails closed. Resolved by name so a sqlglot without one still works.
+_WRITE_TOKEN_TYPES = frozenset(
+    token_type
+    for name in (
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "DROP",
+        "CREATE",
+        "ALTER",
+        "TRUNCATE",
+        "ATTACH",
+        "DETACH",
+        "PRAGMA",
+        "GRANT",
+        "REVOKE",
+        "COMMAND",
+    )
+    if (token_type := getattr(TokenType, name, None)) is not None
+)
 _LEADING_STATEMENT_RE = re.compile(rf"^\s*({_STATEMENT_KEYWORDS})\b", re.IGNORECASE)
 
 
@@ -80,11 +105,17 @@ def find_stacked_statement(raw: str) -> str | None:
     a clean answer.
 
     What follows the first statement counts as a statement when it starts with a statement
-    keyword *and* sqlglot can parse it (the whole remainder up to its own semicolon, or just
-    its first line). Explanations such as ``This query counts the orders.`` fail that test.
-    An imperative sentence that happens to parse, such as ``Drop the LIMIT to see all rows``,
-    is reported too: like the function allowlist, this fails closed, and a false alarm shows
-    up in the eval rather than a missed attack showing up nowhere.
+    keyword *and* either sqlglot can parse it (the whole remainder up to its own semicolon, or
+    just its first line) or it contains a write keyword (:func:`write_keywords`).
+    Explanations such as ``This query counts the orders.`` fail both tests. An imperative
+    sentence that happens to parse, such as ``Drop the LIMIT to see all rows``, is reported
+    too: like the function allowlist, this fails closed, and a false alarm shows up in the
+    eval rather than a missed attack showing up nowhere.
+
+    The write-keyword test exists because of a real reply:
+    ``SELECT name_en FROM couriers; WITH c AS (DROP TABLE couriers)``. The second statement
+    is not valid SQL, so it could never have run, but it is plainly an attempt to drop a
+    table, and the parse-only test recorded the reply as a clean answer.
     """
     text = _locate_statement(raw)
     if not text:
@@ -98,7 +129,24 @@ def find_stacked_statement(raw: str) -> str | None:
     for candidate in (second, first_line):
         if candidate and _parses(candidate):
             return second
+    if write_keywords(second):
+        return second
     return None
+
+
+def write_keywords(text: str) -> list[str]:
+    """Write, DDL and engine keywords that appear in ``text`` as SQL, in order.
+
+    Uses sqlglot's tokenizer, which works on text that doesn't parse, and knows that
+    ``'DROP TABLE x'`` is a string and ``"drop"`` a quoted name: a keyword inside either is
+    not a keyword. This is telemetry and repair policy, never the safety decision: whether
+    something may run is decided by the validator on a parsed tree (D1).
+    """
+    try:
+        tokens = sqlglot.tokenize(text, read="sqlite")
+    except Exception:  # an unterminated string, say: fall back to "nothing recognised"
+        return []
+    return [t.text.upper() for t in tokens if t.token_type in _WRITE_TOKEN_TYPES]
 
 
 def _locate_statement(raw: str) -> str:

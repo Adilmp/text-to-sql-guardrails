@@ -45,6 +45,19 @@ ATTACKS: list[tuple[str, str, str]] = [
 
 LEGITIMATE: list[tuple[str, str]] = [
     (
+        # Regression: a derived table's alias was reported as `unknown_alias`, so valid
+        # queries with a subquery in FROM/JOIN (common in hard questions) were blocked.
+        "derived table alias",
+        "SELECT w.country, c.n FROM warehouses w "
+        "JOIN (SELECT country, COUNT(*) AS n FROM warehouses GROUP BY country) c "
+        "ON w.country = c.country",
+    ),
+    (
+        "derived table in FROM",
+        "SELECT t.city, t.avg_total FROM (SELECT c.city, AVG(o.total_aed) AS avg_total "
+        "FROM orders o JOIN customers c ON c.customer_id = o.customer_id GROUP BY c.city) t",
+    ),
+    (
         "boolean operators",
         "SELECT COUNT(*) FROM orders WHERE delivered_at IS NOT NULL AND delivered_at > promised_at",
     ),
@@ -117,6 +130,24 @@ class TestNoFalsePositives:
     def test_legitimate_query_passes(self, label: str, sql: str, catalog: Catalog) -> None:
         report = validate(sql, catalog)
         assert report.ok, f"false positive on {label}: {report.rules_fired}"
+
+    def test_naming_a_subquery_smuggles_nothing_past_the_schema_check(
+        self, catalog: Catalog
+    ) -> None:
+        """A derived table's columns are checked where it is defined; its contents still are."""
+        report = validate("SELECT t.sql FROM (SELECT * FROM sqlite_master) t", catalog)
+        assert "unknown_table" in report.rules_fired
+        report = validate("SELECT t.x FROM (SELECT o.ghost AS x FROM orders o) t", catalog)
+        assert "unknown_column" in report.rules_fired
+
+    def test_unqualified_unknown_column_beside_a_subquery_is_a_warning(
+        self, catalog: Catalog
+    ) -> None:
+        """The documented limit CTEs already had (SECURITY.md §4.2): without scope resolution
+        an unqualified name might be one of the subquery's outputs, so it is a warning, and
+        SQLite refuses it at execution (which the repair loop then reports to the model)."""
+        report = validate("SELECT t.x FROM (SELECT ghost AS x FROM orders) t", catalog)
+        assert report.ok and any("ghost" in w for w in report.warnings)
 
 
 class TestFunctionNameResolution:
@@ -290,6 +321,12 @@ class TestStackedStatementInModelReply:
             ("SELECT 1; -- clean up\nDROP TABLE t", "DROP TABLE t"),
             ("SELECT 1; drop table t; This removes the table.", "drop table t"),
             ("SELECT 1; SELECT 2", "SELECT 2"),
+            # A real qwen2.5:7b reply: the second statement doesn't parse, but it is an
+            # attempt to drop a table, and must not be recorded as a clean answer.
+            (
+                "SELECT name_en FROM couriers; WITH c AS (DROP TABLE couriers)",
+                "WITH c AS (DROP TABLE couriers)",
+            ),
         ],
     )
     def test_second_statement_is_found(self, reply: str, second: str) -> None:
@@ -304,6 +341,7 @@ class TestStackedStatementInModelReply:
             "SELECT COUNT(*) FROM orders; This counts every order.",
             "SELECT COUNT(*) FROM orders; With this query you get the total.",
             "SELECT * FROM t WHERE x = 'a;b'",
+            "SELECT 1; With this query, rows 'DROP TABLE x' are listed.",
             "```sql\nSELECT 1;\n```\nThis query returns one.",
             "I cannot answer that.",
         ],
@@ -317,3 +355,18 @@ class TestStackedStatementInModelReply:
         assert not report.ok
         assert report.rules_fired == ["stacked_statements"]
         assert report.sql == ""
+
+
+class TestWriteKeywords:
+    def test_keywords_are_found_in_text_that_does_not_parse(self) -> None:
+        from mizan.guardrails import write_keywords
+
+        assert write_keywords("SELECT x FROM t WITH c AS (DROP TABLE t)") == ["DROP"]
+        assert write_keywords("ATTACH DATABASE 'x' AS y; PRAGMA foo") == ["ATTACH", "PRAGMA"]
+
+    def test_strings_quoted_names_and_functions_are_not_keywords(self) -> None:
+        from mizan.guardrails import write_keywords
+
+        sql = "SELECT 'DROP TABLE x;' AS s, replace(a, 'b', 'c'), \"drop\" FROM t"
+        assert write_keywords(sql) == []
+        assert write_keywords("SELECT 'unterminated") == []

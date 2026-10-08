@@ -17,38 +17,32 @@ the wrong reason — most commonly on a small database where two different filte
 select the same records. That is a real limitation of the metric, not something this
 implementation papers over; it is why the suite also reports a per-tag breakdown, so a
 suspiciously perfect score on ``date_logic`` is visible.
+
+**Strict, and a second number that allows extra columns.** Strict execution accuracy marks
+"which couriers are not active?" wrong when the answer lists the right courier with its
+Arabic name beside the English one. A person reading that answer would call it right. So
+every case gets a second verdict, ``correct_relaxed``: the gold result's columns must all be
+present in the prediction, row for row, but extra columns are allowed. It never accepts a
+*missing* column or a wrong row. The strict number stays the headline and is what the
+regression gate judges; the relaxed one is reported beside it so the gap between "wrong
+answer" and "right answer, extra column" is visible instead of argued about (D32).
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
 from ..errors import MizanError
 from ..guardrails import execute
+from ..guardrails.policy import DANGEROUS_RULES
 from ..logging import get_logger
 
 logger = get_logger("eval.metrics")
-
-
-#: Guardrail rules that fire on output which would have caused real harm if executed:
-#: writes, DDL, sandbox escape, dangerous functions, stacked statements.
-#:
-#: ``unknown_table``/``unknown_column`` are deliberately **not** here. A model that answers
-#: "read /etc/passwd" with ``SELECT content FROM passwd`` has complied with the injection,
-#: but the statement is inert — there is no such table, and it would have errored harmlessly.
-#: That is an *attempt*, not a danger, and conflating the two overstates the threat.
-DANGEROUS_RULES: frozenset[str] = frozenset(
-    {
-        "write_operation",
-        "dangerous_statement",
-        "denied_function",
-        "stacked_statements",
-        "unsupported_statement",
-    }
-)
 
 
 def classify_injection(blocked_rules: tuple[str, ...] | list[str]) -> str:
@@ -112,6 +106,18 @@ class CaseOutcome:
     #: ``provider_timeout``...). The regression gate uses it to tell a broken run from a
     #: worse model. Records written before this field existed have ``None``.
     error_code: str | None = None
+    #: Like ``correct``, but extra columns in the prediction are allowed (see the module
+    #: docstring). ``None`` for adversarial cases and for records written before it existed.
+    correct_relaxed: bool | None = None
+    #: How many times the pipeline asked the model to fix its own query (0 = first answer).
+    repairs: int = 0
+    #: Every guardrail rule that fired on any attempt, including attempts a repair replaced.
+    #: The adversarial metric reads this, so a repair can never hide what the model first
+    #: tried to do.
+    rules_seen: tuple[str, ...] = ()
+    #: Every reply the model gave for this case, in order, when there was more than one
+    #: (self-consistency samples, then repairs). ``raw_output`` is the one that was used.
+    attempts: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -132,6 +138,10 @@ class CaseOutcome:
             "confidence": round(self.confidence, 3),
             "latency_ms": round(self.latency_ms, 1),
             "raw_output": self.raw_output,
+            "correct_relaxed": self.correct_relaxed,
+            "repairs": self.repairs,
+            "rules_seen": list(self.rules_seen),
+            "attempts": list(self.attempts),
         }
 
 
@@ -152,6 +162,18 @@ class SuiteSummary:
     rejection_rules: dict[str, int] = field(default_factory=dict)
     mean_latency_ms: float = 0.0
     total_seconds: float = 0.0
+    #: Cases correct when extra columns are allowed. ``None`` when no case has the verdict.
+    correct_relaxed: int | None = None
+    #: Latency percentiles. A mean hides the slow tail, which is what a user waiting on a
+    #: cold prompt actually experiences (DDIA ch. 1, "Describing Performance").
+    p50_latency_ms: float = 0.0
+    p95_latency_ms: float = 0.0
+    #: Cases where the pipeline asked the model to repair its query, and how many of those
+    #: ended correct.
+    repaired: int = 0
+    repaired_correct: int = 0
+    #: One-off cost of loading the model and reading the prompt before the first case.
+    warmup_ms: float | None = None
 
     @property
     def accuracy(self) -> float:
@@ -172,38 +194,102 @@ class SuiteSummary:
             "by_tag": self.by_tag,
             "rejection_rules": self.rejection_rules,
             "mean_latency_ms": round(self.mean_latency_ms, 1),
+            "p50_latency_ms": round(self.p50_latency_ms, 1),
+            "p95_latency_ms": round(self.p95_latency_ms, 1),
             "total_seconds": round(self.total_seconds, 1),
+            "correct_relaxed": self.correct_relaxed,
+            "accuracy_relaxed": (
+                round(self.correct_relaxed / self.n, 4)
+                if self.correct_relaxed is not None and self.n
+                else None
+            ),
+            "repaired": self.repaired,
+            "repaired_correct": self.repaired_correct,
+            "warmup_ms": round(self.warmup_ms, 1) if self.warmup_ms is not None else None,
         }
 
 
-def results_match(
-    predicted_sql: str, gold_sql: str, db_path: Path, *, max_rows: int = 1000
-) -> bool:
-    """Whether two queries return the same result set, ignoring row and column order.
+@dataclass(frozen=True)
+class Match:
+    """The two verdicts for one prediction against its gold queries."""
 
-    Column order is normalised by comparing each row as a *sorted tuple of its values*.
-    This is what makes ``SELECT name, count`` and ``SELECT count, name`` compare equal —
-    correct, because the question does not specify a column order, and the alternative is
-    marking a right answer wrong for cosmetic reasons.
+    strict: bool
+    relaxed: bool
+
+
+def score_prediction(
+    predicted_sql: str,
+    gold: str | Sequence[str],
+    db_path: Path,
+    *,
+    max_rows: int = 1000,
+) -> Match:
+    """Compare a prediction's result with every acceptable gold result.
+
+    ``strict``: the result sets are identical, ignoring row and column order. ``relaxed``:
+    every gold column is present in the prediction with the same rows, and the prediction may
+    carry extra columns (see the module docstring).
 
     A gold query that fails to execute is a bug in the suite, not a model failure, so it is
-    logged loudly and returns ``False``.
+    logged loudly and never matches.
     """
-    try:
-        gold = execute(gold_sql, db_path, max_rows=max_rows, timeout_s=15.0)
-    except MizanError as exc:
-        logger.error(
-            "GOLD QUERY FAILED - this is a bug in the eval suite, not the model",
-            extra={"gold_sql": gold_sql, "error": str(exc)},
-        )
-        return False
+    golds = [gold] if isinstance(gold, str) else list(gold)
+    gold_rows: list[tuple[tuple[Any, ...], ...]] = []
+    for query in golds:
+        try:
+            gold_rows.append(execute(query, db_path, max_rows=max_rows, timeout_s=15.0).rows)
+        except MizanError as exc:
+            logger.error(
+                "GOLD QUERY FAILED - this is a bug in the eval suite, not the model",
+                extra={"gold_sql": query, "error": str(exc)},
+            )
+    if not gold_rows:
+        return Match(strict=False, relaxed=False)
 
     try:
-        predicted = execute(predicted_sql, db_path, max_rows=max_rows, timeout_s=15.0)
+        predicted = execute(predicted_sql, db_path, max_rows=max_rows, timeout_s=15.0).rows
     except MizanError:
-        return False
+        return Match(strict=False, relaxed=False)
 
-    return _normalise(gold.rows) == _normalise(predicted.rows)
+    strict = any(_normalise(rows) == _normalise(predicted) for rows in gold_rows)
+    relaxed = strict or any(_contains_columns(predicted, rows) for rows in gold_rows)
+    return Match(strict=strict, relaxed=relaxed)
+
+
+def results_match(
+    predicted_sql: str, gold_sql: str | Sequence[str], db_path: Path, *, max_rows: int = 1000
+) -> bool:
+    """Whether the prediction returns the same result set as a gold query (strict).
+
+    Row and column order are ignored: rows are compared as *sorted tuples of their values*,
+    so ``SELECT name, count`` and ``SELECT count, name`` compare equal. The question does
+    not specify a column order, and marking a right answer wrong for cosmetic reasons would
+    be the alternative.
+    """
+    return score_prediction(predicted_sql, gold_sql, db_path, max_rows=max_rows).strict
+
+
+#: Above this many predicted columns the relaxed check gives up rather than try every
+#: subset. Real answers are a handful of columns wide; a 30-column ``SELECT *`` is not an
+#: answer with "extra columns", it is a table dump.
+_MAX_RELAXED_COLUMNS = 8
+
+
+def _contains_columns(
+    predicted: tuple[tuple[Any, ...], ...], gold: tuple[tuple[Any, ...], ...]
+) -> bool:
+    """Whether some choice of the prediction's columns reproduces the gold result exactly."""
+    if len(predicted) != len(gold) or not gold:
+        return False
+    width_gold, width_pred = len(gold[0]), len(predicted[0])
+    if width_pred <= width_gold or width_pred > _MAX_RELAXED_COLUMNS:
+        return False
+    target = _normalise(gold)
+    for keep in combinations(range(width_pred), width_gold):
+        projected = tuple(tuple(row[i] for i in keep) for row in predicted)
+        if _normalise(projected) == target:
+            return True
+    return False
 
 
 def _normalise(rows: tuple[tuple[Any, ...], ...]) -> Counter[tuple[str, ...]]:
@@ -255,7 +341,15 @@ def summarise(
         total_seconds=total_seconds,
     )
     if outcomes:
-        summary.mean_latency_ms = sum(o.latency_ms for o in outcomes) / len(outcomes)
+        latencies = sorted(o.latency_ms for o in outcomes)
+        summary.mean_latency_ms = sum(latencies) / len(latencies)
+        summary.p50_latency_ms = _percentile(latencies, 50)
+        summary.p95_latency_ms = _percentile(latencies, 95)
+    relaxed = [o.correct_relaxed for o in outcomes if o.correct_relaxed is not None]
+    if relaxed:
+        summary.correct_relaxed = sum(relaxed)
+    summary.repaired = sum(o.repairs > 0 for o in outcomes)
+    summary.repaired_correct = sum(o.repairs > 0 and o.correct for o in outcomes)
 
     for outcome in outcomes:
         _bump(summary.by_language, outcome.language, outcome.correct)
@@ -271,3 +365,11 @@ def _bump(bucket: dict[str, dict[str, int]], key: str, correct: bool) -> None:
     entry = bucket.setdefault(key, {"n": 0, "correct": 0})
     entry["n"] += 1
     entry["correct"] += int(correct)
+
+
+def _percentile(sorted_values: list[float], pct: float) -> float:
+    """Nearest-rank percentile: always one of the measured values, never an interpolation."""
+    if not sorted_values:
+        return 0.0
+    rank = max(1, -(-len(sorted_values) * pct // 100))  # ceil without floats
+    return sorted_values[int(rank) - 1]

@@ -394,3 +394,40 @@ class TestSecurityHeaders:
         on a tool with no cookies and no ambient authority.
         """
         assert "access-control-allow-origin" not in self._headers(db_path)
+
+
+class TestRepairChannels:
+    """The repair loop sends database values and model output back to the model (D35, D36)."""
+
+    def test_unsafe_stored_values_never_reach_a_repair_hint(self, tmp_path: Path) -> None:
+        """Value suggestions come from free-text columns (names from a signup form), so they
+        pass the same allowlist as sampled values before reaching the model."""
+        import sqlite3
+
+        from mizan.validate.grounding import check_values
+
+        db = tmp_path / "people.sqlite"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        names = [f"Person {i}" for i in range(20)]
+        names += ["Huda Al Khalifa", "Huda Al Khalifa'; DROP TABLE people--"]
+        conn.executemany("INSERT INTO people (name) VALUES (?)", [(n,) for n in names])
+        conn.commit()
+        conn.close()
+
+        catalog = Catalog.from_sqlite(db)
+        issues = check_values(
+            "SELECT COUNT(*) FROM people WHERE name = 'huda al khalifa'", catalog, db
+        )
+        assert len(issues) == 1
+        assert issues[0].suggestions == ("Huda Al Khalifa",)
+        assert "DROP" not in str(issues[0])
+
+    def test_a_blocked_attack_is_never_sent_back_for_repair(self, catalog: Catalog) -> None:
+        from mizan.generate.repair import diagnose
+        from mizan.guardrails import validate
+
+        for attack in ("DROP TABLE orders", "SELECT 1; DELETE FROM orders"):
+            report = validate(attack, catalog)
+            assert not report.ok
+            assert diagnose(report, None, [], catalog) is None

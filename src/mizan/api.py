@@ -17,6 +17,7 @@ still return real error codes.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -57,6 +58,8 @@ class AskResponse(BaseModel):
     provider: str
     model: str
     latency_ms: float
+    #: How many times the model was asked to fix its own query before this answer.
+    repairs: int = 0
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -77,6 +80,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         state["catalog"] = load_catalog(cfg.db_path)
         state["provider"] = build_provider(cfg)
         state["engine"] = TextToSQL(state["catalog"], state["provider"], cfg)
+        if state["provider"].name != "mock":
+            # Read the prompt into the model's cache now, in the background, so the first
+            # visitor doesn't wait ~2 minutes on a CPU. A request that arrives first simply
+            # queues behind it in the model server.
+            threading.Thread(target=state["engine"].warm_up, daemon=True).start()
         logger.info(
             "api ready",
             extra={"provider": state["provider"].name, "model": state["provider"].model},
@@ -142,19 +150,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def schema() -> dict[str, Any]:
         catalog = state["catalog"]
         return {
-            "ddl": catalog.to_prompt(include_arabic=True),
+            "ddl": catalog.to_prompt(languages=("ar", "ur")),
             "tables": {
                 name: {
                     "columns": [c.name for c in table.columns],
                     "aliases_ar": list(table.aliases_ar),
+                    "aliases_ur": list(table.aliases_ur),
                     "row_count": table.row_count,
                 }
                 for name, table in sorted(catalog.tables.items())
             },
         }
 
+    # A plain `def`, not `async def`: answering blocks on the model for seconds to minutes.
+    # FastAPI runs sync handlers in a thread pool; an async handler doing the same blocking
+    # call would freeze the event loop, and with it every other request, health checks
+    # included, until the model replied.
     @app.post("/api/ask", response_model=AskResponse)
-    async def ask(request: AskRequest) -> AskResponse:
+    def ask(request: AskRequest) -> AskResponse:
         engine: TextToSQL = state["engine"]
         if request.samples > 1:
             engine = TextToSQL(
@@ -192,6 +205,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             provider=answer.provider,
             model=answer.model,
             latency_ms=round(answer.latency_ms, 1),
+            repairs=answer.repairs,
         )
 
     return app

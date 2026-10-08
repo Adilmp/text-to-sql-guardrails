@@ -451,7 +451,9 @@ def _alias_map(tree: exp.Expression) -> dict[str, str]:
     """Map table alias -> real table name, plus each real table mapped to itself.
 
     CTE names map to themselves so that selecting from a CTE is not reported as an unknown
-    table; their internal columns are validated where the CTE body is validated.
+    table; their internal columns are validated where the CTE body is validated. Derived
+    tables (``JOIN (SELECT ...) AS c``) are the same thing written inline and are treated
+    the same way.
     """
     mapping: dict[str, str] = {}
     for table in tree.find_all(exp.Table):
@@ -461,10 +463,22 @@ def _alias_map(tree: exp.Expression) -> dict[str, str]:
         mapping[real] = real
         if alias := table.alias:
             mapping[alias.lower()] = real
-    for cte in tree.find_all(exp.CTE):
-        if cte.alias:
-            mapping[cte.alias.lower()] = cte.alias.lower()
+    for name in _derived_names(tree):
+        mapping[name] = name
     return mapping
+
+
+def _derived_names(tree: exp.Expression) -> set[str]:
+    """Names of CTEs and aliased subqueries: relations the query builds for itself.
+
+    A column qualified by one of these is checked where the relation is defined, not here.
+    Every real table and column *inside* the definition is still validated, so naming a
+    subquery can't smuggle anything past the schema check:
+    ``(SELECT * FROM sqlite_master) AS t`` is still an unknown table.
+    """
+    names = {cte.alias.lower() for cte in tree.find_all(exp.CTE) if cte.alias}
+    names |= {sub.alias.lower() for sub in tree.find_all(exp.Subquery) if sub.alias}
+    return names
 
 
 def _check_schema(tree: exp.Expression, catalog: Catalog) -> tuple[list[Violation], list[str]]:
@@ -485,6 +499,8 @@ def _check_schema(tree: exp.Expression, catalog: Catalog) -> tuple[list[Violatio
 
     aliases = _alias_map(tree)
     cte_names = {c.alias.lower() for c in tree.find_all(exp.CTE) if c.alias}
+    # CTEs and aliased subqueries: relations whose columns are checked where they are built.
+    derived = _derived_names(tree)
     declared = _defined_aliases(tree)
 
     #: A single SELECT with no CTEs has exactly one scope, so "the tables referenced
@@ -520,8 +536,8 @@ def _check_schema(tree: exp.Expression, catalog: Catalog) -> tuple[list[Violatio
                     Violation("unknown_alias", f"alias {column.table!r} is not defined")
                 )
                 continue
-            if target in cte_names:
-                continue  # columns of a CTE are validated inside the CTE body
+            if target in derived:
+                continue  # columns of a CTE or subquery are validated inside its body
             if not catalog.has_column(target, name):
                 violations.append(
                     Violation(
@@ -532,9 +548,10 @@ def _check_schema(tree: exp.Expression, catalog: Catalog) -> tuple[list[Violatio
         else:
             owners = [t for t in referenced_real_tables if catalog.has_column(t, name)]
             if not owners:
-                if cte_names:
+                if derived:
                     warnings.append(
-                        f"column {name!r} not found in base tables; assumed to come from a CTE"
+                        f"column {name!r} not found in base tables; "
+                        "assumed to come from a CTE or subquery"
                     )
                 else:
                     violations.append(

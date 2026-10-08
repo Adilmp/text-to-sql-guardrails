@@ -104,6 +104,14 @@ class Policy:
     max_regressions: int = 0
     #: case id -> the reason it is allowed to regress.
     accepted: Mapping[str, str] = field(default_factory=dict)
+    #: Run directory -> its name on older commits, and suite -> its older name. A rename is
+    #: declared here, in a reviewed file, so the gate compares the renamed run with its
+    #: predecessor instead of treating it as new (which it would let through unchecked).
+    renamed_runs: Mapping[str, str] = field(default_factory=dict)
+    renamed_suites: Mapping[str, str] = field(default_factory=dict)
+
+    def same_suite(self, baseline: str, candidate: str) -> bool:
+        return baseline == candidate or self.renamed_suites.get(candidate) == baseline
 
     @classmethod
     def load(cls, path: Path = POLICY_FILE) -> Policy:
@@ -126,7 +134,14 @@ class Policy:
             or max_regressions < 0
         ):
             raise GateInputError("max_regressions must be a non-negative integer")
-        return cls(tuple(raw.get("gated_runs", ())), max_regressions, accepted)
+        renamed = raw.get("renamed", {})
+        return cls(
+            tuple(raw.get("gated_runs", ())),
+            max_regressions,
+            accepted,
+            dict(renamed.get("runs", {})),
+            dict(renamed.get("suites", {})),
+        )
 
 
 # --------------------------------------------------------------------------------- runs
@@ -181,6 +196,20 @@ def load_run(run_dir: Path, *, ref: str | None = None, repo: Path = PROJECT_ROOT
     provider = settings.get("provider", "?")
     model = settings.get(f"{provider}_model") or provider
     return Run(label, config.get("suite", "?"), model, config.get("fingerprint"), outcomes)
+
+
+def empty_run(label: str, suite: str) -> Run:
+    """A baseline with no cases, for a gated run that doesn't exist on the base yet."""
+    return Run(label, suite, "-", None, {})
+
+
+def exists_at(run_dir: Path, ref: str, repo: Path = PROJECT_ROOT) -> bool:
+    """Whether ``run_dir`` has outcomes at git ``ref`` (as opposed to git failing)."""
+    try:
+        _git_show(repo, ref, f"{_repo_relative(run_dir, repo)}/outcomes.jsonl")
+    except GateInputError:
+        return False
+    return True
 
 
 def _repo_relative(path: Path, repo: Path) -> str:
@@ -273,6 +302,9 @@ class GateReport:
     safety: list[tuple[str, str]] = field(default_factory=list)
     infra: list[tuple[str, str, str]] = field(default_factory=list)
     missing: list[tuple[str, str]] = field(default_factory=list)
+    #: Cases only the candidate has: (case id, correct). New questions have no baseline, so
+    #: they can't regress; they are reported, safety-checked, and become baseline on merge.
+    added: list[tuple[str, bool]] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     unused_acceptances: list[str] = field(default_factory=list)
     verdict: Verdict = Verdict.PASS
@@ -305,7 +337,7 @@ def compare(baseline: Run, candidate: Run, policy: Policy | None = None) -> Gate
     policy = policy or Policy()
     report = GateReport(candidate.suite, baseline, candidate, policy)
 
-    if baseline.suite != candidate.suite:
+    if not policy.same_suite(baseline.suite, candidate.suite):
         # Nothing about a mismatched pair is meaningful, not even its safety column: the
         # case ids and what "correct" means both depend on the suite.
         report.problems.append(
@@ -314,9 +346,17 @@ def compare(baseline: Run, candidate: Run, policy: Policy | None = None) -> Gate
         _decide(report)
         return report
     for case_id in sorted(baseline.outcomes.keys() - candidate.outcomes.keys()):
+        # Evidence that disappeared. A case removed on purpose belongs in a reviewed change
+        # to the suite; until the base has caught up, its absence is inconclusive.
         report.missing.append((case_id, "missing from the candidate run"))
     for case_id in sorted(candidate.outcomes.keys() - baseline.outcomes.keys()):
-        report.missing.append((case_id, "not in the baseline (a new case has no baseline yet)"))
+        # A new question can't have regressed. Treating it as missing evidence used to make
+        # every change that *added* eval cases INCONCLUSIVE, so the suite could never grow
+        # through CI. Safety is still checked on it, below.
+        after = candidate.outcomes[case_id]
+        if problem := safety_problem(after, candidate.suite):
+            report.safety.append((case_id, problem))
+        report.added.append((case_id, bool(after.get("correct"))))
 
     for case_id in sorted(baseline.outcomes.keys() & candidate.outcomes.keys()):
         before, after = baseline.outcomes[case_id], candidate.outcomes[case_id]
@@ -415,12 +455,20 @@ def render_markdown(report: GateReport) -> str:
         "",
         f"- Baseline: `{b.label}` ({b.model})",
         f"- Candidate: `{c.label}` ({c.model})"
-        + ("  ⟵ **model changed**" if b.model != c.model else ""),
+        + ("  ⟵ **model changed**" if b.outcomes and b.model != c.model else ""),
         f"- Correct on the {n} comparable case(s): **{report.baseline_correct} → "
         f"{report.candidate_correct}**; {len(report.regressed)} regressed, "
         f"{len(report.accepted)} accepted, {len(report.fixed)} fixed, "
         f"{report.sql_changed} same verdict with different SQL",
         f"- Exact McNemar p = {report.mcnemar_p:.3f} (reported, not enforced)",
+        *(
+            [
+                f"- New cases (no baseline yet): {len(report.added)}, of which "
+                f"{sum(ok for _, ok in report.added)} correct"
+            ]
+            if report.added
+            else []
+        ),
         "",
         *[f"> {reason}" for reason in report.reasons],
     ]
