@@ -15,7 +15,7 @@ confidence score that explains its weakest point.
 ![Launch video: an Urdu question answered in Urdu, a courier chart, and "drop the orders table" blocked by the guardrails](docs/media/launch-video.gif)
 
 <details>
-<summary>▶ Watch with sound</summary>
+<summary>Watch with sound</summary>
 
 https://github.com/user-attachments/assets/b2fedc20-ca64-47de-8b22-003bfedd0c56
 
