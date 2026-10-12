@@ -12,7 +12,8 @@ real schema, and only then run in a read-only sandbox. When it is wrong in a way
 see, the model is shown exactly what is wrong and asked again. Every answer comes with a
 confidence score that explains its weakest point.
 
-[![Launch video: a question in Urdu answered, a courier chart, and "drop the orders table" blocked by the guardrails](docs/media/launch-video.jpg)](docs/media/launch-video.mp4)
+https://github.com/user-attachments/assets/b2fedc20-ca64-47de-8b22-003bfedd0c56
+
 
 *23 seconds: an Urdu question answered in Urdu, a chart, and "drop the orders table" blocked
 before it reaches the database. Every answer in it is real output from `qwen2.5:7b`.*
