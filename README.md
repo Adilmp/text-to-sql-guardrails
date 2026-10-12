@@ -15,8 +15,6 @@ confidence score that explains its weakest point.
 https://github.com/user-attachments/assets/b2fedc20-ca64-47de-8b22-003bfedd0c56
 
 
-*23 seconds: an Urdu question answered in Urdu, a chart, and "drop the orders table" blocked
-before it reaches the database. Every answer in it is real output from `qwen2.5:7b`.*
 
 | | |
 |---|---|
