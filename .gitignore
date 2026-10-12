@@ -42,3 +42,6 @@ PROGRESS.md
 
 # Candidate eval runs made by scripts/regression_gate.py before they are promoted into runs/
 .gate/
+
+# /brag launch-video workspace
+brag-output/
