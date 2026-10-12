@@ -12,9 +12,14 @@ real schema, and only then run in a read-only sandbox. When it is wrong in a way
 see, the model is shown exactly what is wrong and asked again. Every answer comes with a
 confidence score that explains its weakest point.
 
-[![Launch video: an Urdu question answered in Urdu, a courier chart, and "drop the orders table" blocked by the guardrails](docs/media/launch-video.gif)](https://github.com/user-attachments/assets/b2fedc20-ca64-47de-8b22-003bfedd0c56)
+![Launch video: an Urdu question answered in Urdu, a courier chart, and "drop the orders table" blocked by the guardrails](docs/media/launch-video.gif)
 
-[▶ Watch with sound](https://github.com/user-attachments/assets/b2fedc20-ca64-47de-8b22-003bfedd0c56)
+<details>
+<summary>▶ Watch with sound</summary>
+
+https://github.com/user-attachments/assets/b2fedc20-ca64-47de-8b22-003bfedd0c56
+
+</details>
 
 
 
