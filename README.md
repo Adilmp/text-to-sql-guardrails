@@ -12,6 +12,11 @@ real schema, and only then run in a read-only sandbox. When it is wrong in a way
 see, the model is shown exactly what is wrong and asked again. Every answer comes with a
 confidence score that explains its weakest point.
 
+[![Launch video: a question in Urdu answered, a courier chart, and "drop the orders table" blocked by the guardrails](docs/media/launch-video.jpg)](docs/media/launch-video.mp4)
+
+*23 seconds: an Urdu question answered in Urdu, a chart, and "drop the orders table" blocked
+before it reaches the database. Every answer in it is real output from `qwen2.5:7b`.*
+
 | | |
 |---|---|
 | Execution accuracy | **85.0%** (51/60) with `qwen2.5:7b` on a local CPU, 20 questions × 3 languages (was 56.7% with the previous pipeline) |
