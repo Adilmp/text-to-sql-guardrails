@@ -105,6 +105,17 @@ class TestValidator:
         report = validate(ORDERS_OF.format(placeholder), catalog, placeholders={"customer_name_1"})
         assert report.rules_fired == ["unknown_placeholder"]
 
+    @pytest.mark.parametrize("parameter", ["@_user_country", "@customer_name_1"])
+    def test_other_parameter_spellings_are_rejected(self, catalog: Catalog, parameter: str) -> None:
+        # SQLite binds @name and $name from the same parameters as :name (Python strips the
+        # prefix), so they must not slip past the issued-placeholder rule.
+        report = validate(ORDERS_OF.format(parameter), catalog, placeholders={"customer_name_1"})
+        assert "unknown_placeholder" in report.rules_fired
+
+    def test_a_dollar_parameter_is_rejected(self, catalog: Catalog) -> None:
+        report = validate(ORDERS_OF.format("$_user_country"), catalog, placeholders=set())
+        assert not report.ok
+
     def test_no_placeholders_are_allowed_by_default(self, catalog: Catalog) -> None:
         report = validate(ORDERS_OF.format(":customer_name_1"), catalog)
         assert report.rules_fired == ["unknown_placeholder"]
