@@ -16,9 +16,13 @@ data, and the ordinary case of a model that is simply wrong in a dangerous way.
 The model is treated as **untrusted input**, not as a component. Nothing it produces is
 executed without passing an independent check.
 
-Out of scope: network security, authentication and multi-tenancy. This is a local
-single-user tool. If it were exposed to real users, §6 lists what would have to be added
-first.
+With a roles file (`<db>.roles.json`) the requester is a second adversary: someone asking for
+rows, columns or tables their role may not read, directly or by steering the model. Private
+values in a question (customer names, contact details) are treated as data the model must not
+see, because the model may be a hosted service (§1, D44).
+
+Out of scope: network security and multi-tenancy. Without a roles file this is a local
+single-user tool. If it were exposed to real users, §6 lists what would still have to be added.
 
 ---
 
@@ -43,6 +47,17 @@ first.
 | Feedback | The browser sends an answer id, never SQL; the server looks its own query up | Planting a "verified" query through the feedback endpoint |
 | Follow-ups | The earlier exchange is looked up by answer id on the server; the browser never supplies it | Injecting a fabricated "earlier answer" into the model's conversation |
 | Clarifications | The browser sends an option number; only the server's own hint text reaches the model | Smuggling instructions into the question through the clarification |
+| Privacy | Stored values of private columns, emails, phones and ID numbers in a question become typed placeholders before any prompt (D44) | A customer's name or contact details reaching the model |
+| Privacy | Placeholder values bound as SQLite parameters, never written into the SQL | A value changing the statement; values in shown, cached or logged SQL |
+| Privacy | Validator accepts only issued placeholders, never quoted; `:_user_*` reserved | The model reaching a value it wasn't given, or a requester's attribute |
+| Privacy | Grounding checks placeholders by column and never suggests values of a private column | "Did you mean" hints sending other customers' names to the model |
+| Privacy | Cache keyed by the masked question; typed placeholder text skips the cache | Names in the cache file; one user's question reading or evicting another's entry |
+| Auth | Bearer token, looked up by SHA-256; 401 before anything runs (D45) | Anyone reaching the data endpoints; identity taken from a request body |
+| Auth | Prompt slice: only the role's tables, columns, joins, definitions and examples | The model (and so the user) learning what a role can't see |
+| Auth | Validator `not_authorized`, fails closed, never repaired | Reads outside the role, including via `*`, subqueries and CTEs; probing through repair |
+| Auth | Row filters rewritten into every reference to a filtered table, with the requester's attributes bound | Rows outside the role, through joins, subqueries, CTEs and UNION branches |
+| Auth | SQLite authorizer refuses reads of tables and columns outside the role | Everything above, with the validator and prompt slice bypassed |
+| Auth | Answer ids bound to their requester; per-role engines and cache contexts | Follow-ups, feedback or cached answers crossing between requesters |
 | Runtime | Read-only URI (`file:...?mode=ro`) | Writes, even with the validator bypassed |
 | Runtime | `PRAGMA query_only = ON` | Writes on a connection that opened read-write |
 | Runtime | Extension loading disabled | `load_extension` if the allowlist were bypassed |
@@ -66,7 +81,10 @@ deleted, writes would still fail.
 
 Three real vulnerabilities, plus one telemetry failure (§2.4). Two vulnerabilities were found
 by probing, one by static analysis plus an adversarial test that caught what the scanner
-missed.
+missed. Building masking and roles found four more (§2.5–2.8), each before it shipped: one by
+reading the grounding code against the new threat (§2.5), one by the privacy eval's leak count
+(§2.6), one by asking what a shared cache key lets a user reach (§2.7) and one by the
+prompt-slice test (§2.8).
 
 ### 2.1 Memory amplification — every limit bounded the wrong dimension
 
@@ -182,6 +200,34 @@ before publishing its numbers.
 
 ---
 
+### 2.5 Repair hints could send other customers' names to the model
+
+Value grounding (D36) answers a near-miss literal with the stored values it probably meant.
+On a private column that is a leak of names nobody typed: a misspelled "Tariq Al Thnai" would
+have come back to the model as "did you mean 'Tariq Al Thani'?". Grounding now never looks up a
+private column. The leak test plants this exact leak and fails (`tests/test_privacy.py`); its
+first version used a first name, which is too far from any stored name to trigger a suggestion,
+and passed with the leak in place.
+
+### 2.6 A possessive slipped past the masker
+
+"Hessa Al Harbi's orders" kept the apostrophe inside the last word, so the name didn't match
+and was sent to the model. Every masker unit test passed; the privacy eval's count of names
+sent caught it on its first run. A trailing `'s` is now matched and kept after the placeholder.
+
+### 2.7 A typed placeholder could reach a shared cache entry
+
+Cache entries are keyed by the masked question, so they are shared between requesters. A user
+typing `:customer_name_1` themselves would have produced the same key as someone else's masked
+question: a hit on their entry, an eviction when it failed validation, or an answer stored
+under it. Questions with placeholder-like text now skip the cache entirely.
+
+### 2.8 Hidden tables visible through the prompt's examples
+
+The prompt slice removed a hidden table from the schema, but a worked example still queried
+`customers`, telling a role without that table that it exists. Examples that touch a hidden
+table are now left out of that role's prompt.
+
 ## 3. Confirmed not exploitable
 
 Tested and blocked. Tests pin each so a refactor cannot quietly regress them.
@@ -197,6 +243,13 @@ Tested and blocked. Tests pin each so a refactor cannot quietly regress them.
 - **Zip Slip** — path-traversal entries in the Spider archive are refused before extraction.
 - **Write attempts at the driver level** — verified with the validator entirely out of the
   loop, including a before/after row count proving the database is unchanged.
+- **Reads outside a role at the driver level** — a hidden table (also via a join or
+  `EXISTS`) and a hidden column (also via `*`, a scalar subquery, a CTE, `WHERE` or
+  `GROUP BY`), refused by SQLite with the validator out of the loop.
+- **Row-filter escapes** — aliases, joins, subqueries, a CTE (including one named after the
+  table, which SQLite refuses as a circular reference) and a UNION branch all return the
+  role's rows only.
+- **Bound values** — a value like `x' OR '1'='1` binds as text and matches nothing.
 
 ---
 
@@ -208,12 +261,19 @@ Tested and blocked. Tests pin each so a refactor cannot quietly regress them.
    CTE or a subquery in `FROM`/`JOIN` an unknown unqualified column only produces a warning
    (SQLite then refuses it at execution, and the repair loop reports that). See `DECISIONS.md` D6.
 3. **Peak allocation on Python 3.10** (§2.1).
-4. **No authentication, authorisation or rate limiting.** Local single-user tool.
-5. **`/api/schema` deliberately exposes** the schema and low-cardinality sample values. It
-   is a demo endpoint; it would not ship as-is.
-6. **Dialectal Arabic and Roman Urdu are untested.** The suite is Modern Standard Arabic and
+4. **Static demo tokens, no rate limiting.** The roles file's four demo tokens are public (the
+   demo page sends them) and never expire. Without a roles file there is no authentication at
+   all: the local single-user tool.
+5. **`/api/schema` exposes** the requester's schema slice and its low-cardinality sample values.
+6. **Row filters are enforced by the query rewrite only.** The SQLite authorizer limits tables
+   and columns, not rows. Grounding's "did you mean" hints also ignore row filters, so a
+   filtered role can be offered a category value (a city) from another country's rows.
+7. **Only whole stored values are masked.** A first name alone or a misspelled name reaches the
+   model as typed (D44). Only the columns listed in `<db>.privacy.json` are private.
+8. **The role check fails closed**, so it can refuse a query a full scope resolver would allow.
+9. **Dialectal Arabic and Roman Urdu are untested.** The suite is Modern Standard Arabic and
    Urdu in Urdu script; Urdu typed in Latin letters is read as English.
-7. **The demo page's CSP allows inline script and style** (`'unsafe-inline'`), because the page
+10. **The demo page's CSP allows inline script and style** (`'unsafe-inline'`), because the page
    is a single self-contained file. `connect-src 'self'` still stops injected script from
    reaching another host; moving the script and styles into separate files would allow dropping
    `'unsafe-inline'`.
@@ -223,22 +283,27 @@ Tested and blocked. Tests pin each so a refactor cannot quietly regress them.
 ## 5. Running the security tests
 
 ```bash
-uv run pytest tests/test_security.py -v
+uv run pytest tests/test_security.py tests/test_authz.py tests/test_api_authz.py \
+  tests/test_privacy.py tests/test_masker.py tests/test_placeholders.py -v
 ```
 
-55 tests (one needs Python 3.11+) across schema exfiltration, resource exhaustion, stored
-prompt injection, driver-level write protection, obfuscation, identifier quoting, API input
-bounds, security headers, and the repair loop's two channels back into the prompt.
+`test_security.py`: 71 tests (one needs Python 3.11+) across schema exfiltration, resource
+exhaustion, stored prompt injection, driver-level write and read protection, obfuscation,
+identifier quoting, API input bounds, security headers, and the repair loop's two channels back
+into the prompt. The other five files (162 tests) cover masking, placeholders, the leak sweep
+(every customer name through every path to the model, and the logs) and authorization by role,
+end to end through the API.
 
 ---
 
 ## 6. What would be required before exposing this to real users
 
-- Authentication, per-user authorisation, and rate limiting on `/api/ask`
-- Row-level access control — the guardrails control *what statements run*, not *whose data
-  they return*
+- Real identity: tokens issued per person, with expiry and rotation, instead of the static
+  demo tokens; and rate limiting on `/api/ask`
+- Row filters enforced below the rewrite as well (views per role, or a database with
+  row-level security), and grounding lookups under the requester's row filters
 - Python 3.11+ so `SQLITE_LIMIT_LENGTH` is enforced at the engine
-- Removing `/api/schema`, or gating it behind authorisation
-- Audit logging tied to user identity (structured logs exist; identity does not)
+- Audit logging tied to identity throughout (`feedback.jsonl` records the role; the structured
+  logs do not)
 - Restricting 👍 "verified" to data owners: today any visitor can verify or report an answer
 - A policy decision on which columns may be sampled into prompts (§2.2)

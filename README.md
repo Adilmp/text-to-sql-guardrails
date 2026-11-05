@@ -29,9 +29,11 @@ https://github.com/user-attachments/assets/b2fedc20-ca64-47de-8b22-003bfedd0c56
 | Hard questions | **78%** (21/27) on joins across 3–4 tables, anti-joins, ratios, date buckets (was 22%, 6/27) |
 | Held-out questions | **66.7%** (16/24) on 8 hard questions × 3 languages written *before* tuning and run once (was 29.2%) |
 | English / Arabic / Urdu | 18/20 · 17/20 · 16/20 on the development suite (Urdu is new; it scored 10/20 through the old Arabic path) |
-| Speed | 8 s median, 22 s p95 per question on a 6-core CPU; the ~3-minute one-off warm-up happens at startup |
+| Private values sent to the model | **0** of 24 questions naming customers, with masking, at the same accuracy (19/24) as without it, when names went out on all 24 |
+| Access by role | Four independent layers; **7/7** questions outside a role refused, 10/11 allowed ones right, each scored against that role's own answer |
+| Speed | 10 s median, 47 s p95 per question on a 6-core CPU in the latest run (8 s / 23 s in the run before it, with identical SQL: CPU latency moves with machine load); the ~3-minute one-off warm-up happens at startup |
 | Harmful statements executed | **0**: every answer to an adversarial prompt contained, across two models |
-| Tests | 439, all offline in ~10 s, run in CI on Python 3.10–3.12 (55 of them security tests) |
+| Tests | 636, all offline in under a minute, run in CI on Python 3.10–3.12 (71 security tests, plus 162 for masking and roles) |
 
 ## The problem
 
@@ -114,7 +116,7 @@ every number, per language, per tag and per failure, generated from the run file
 | … with extra columns allowed | 10/24 | 18/24 |
 | … hard questions | 4/21 (19%) | **13/21 (62%)** |
 | The original 24 questions (the gate's baseline) | 19/24 | **24/24** |
-| Latency p50 / p95, development suite | 8.3 s / 26.5 s | 8.0 s / 21.7 s |
+| Latency p50 / p95, development suite | 8.3 s / 26.5 s | 8.0 s / 21.7 s when measured (latest run: 10.1 s / 46.8 s, same SQL, a busier machine) |
 | First question of a session | 128 s: timed out at 120 s, then retried | answered warm; the ~3 min warm-up runs at startup |
 | Adversarial prompts contained | 7/7 | 7/7 |
 
@@ -208,6 +210,37 @@ in English, Arabic and Urdu), stores the ones the cache would store anyway, and 
 and resumed. Expect one to two hours on a CPU. The answers are the model's own, mistakes
 included: the eval's known-correct queries are never planted, because that would make the demo
 look more accurate than the model is.
+
+## Who sees what: roles and private values
+
+Two questions decide whether a tool like this can be handed to more than one person: does
+everyone see everything, and does the model see the customers? Both are answered in code, and
+measured.
+
+**Roles.** With `data/gulf_logistics.roles.json` beside the database, every request needs a
+bearer token, and the token's role decides what an answer can contain. The demo has four:
+`admin` (everything), `courier_ops` (orders, couriers and warehouses only), `ksa_manager` (Saudi
+Arabia's orders and customers only) and `analyst` (everything except who each customer is). The
+page's "Signed in as" picker switches between them. "How many orders are there?" is 900 for the
+admin and 444 for the Saudi manager, from the same SQL.
+
+A role is enforced four times, each layer independent of the others ([D45](DECISIONS.md)): the
+model is shown only the role's slice of the schema; the validator rejects any read outside it as
+`not_authorized` and never repairs it; row filters are rewritten into every reference to a
+filtered table, with the requester's country bound from the token; and SQLite itself refuses
+reads of hidden tables and columns, which the tests check with the other layers removed.
+
+**Private values.** Customer names, emails, phone numbers and CNIC/Emirates ID numbers in a
+question are replaced by typed placeholders before the model sees it ([D44](DECISIONS.md)).
+"How many orders did Tariq Al Thani place?" goes to the model as "…did `:customer_name_1`
+place?"; the model writes `WHERE c.name_en = :customer_name_1`, and the name is bound as a SQLite
+parameter when the query runs. It never appears in a prompt, the SQL text, the cache or the
+logs. On 24 questions that name customers the model is as accurate with masking as without
+(19/24), and the leak count goes from 24 cases to 0 ([results](docs/results.md)).
+
+What it doesn't cover is written down with the rest ([SECURITY.md](SECURITY.md) §4): row filters
+are enforced by the rewrite, not by SQLite; a first name alone or a misspelled name isn't a
+stored value, so it reaches the model as typed; the demo tokens are public.
 
 ## Catching regressions
 
@@ -309,8 +342,9 @@ MIZAN_PROVIDER=mock uv run mizan ask "drop the orders table"
 | `uv run mizan serve` | Web demo on http://127.0.0.1:8000 (add `MIZAN_PROVIDER=mock` for no model) |
 | `uv run mizan eval --suite both --resume` | Development suite + adversarial suite; results land in `runs/` |
 | `uv run mizan eval --suite holdout` | The held-out suite, on purpose ([D31](DECISIONS.md)) |
+| `uv run python scripts/run_eval.py ollama qwen2.5:7b --suites privacy privacy_plain authz` | Private-value and role suites: masked vs unmasked, and each demo role ([D44](DECISIONS.md), [D45](DECISIONS.md)) |
 | `uv run mizan health` | Check the database and the model backend |
-| `uv run pytest` | 439 tests, offline, about 10 seconds |
+| `uv run pytest` | 636 tests, offline, under a minute |
 
 Settings come from `MIZAN_*` environment variables (`MIZAN_PROVIDER`, `MIZAN_OLLAMA_MODEL`,
 `MIZAN_MAX_REPAIRS`, `MIZAN_OLLAMA_KEEP_ALIVE`, `MIZAN_MAX_ROWS`, …); see
@@ -323,7 +357,7 @@ the model then stays loaded for as long as the server runs.
 
 ## Design decisions
 
-43 decisions are written up in [DECISIONS.md](DECISIONS.md). The most important:
+45 decisions are written up in [DECISIONS.md](DECISIONS.md). The most important:
 
 - **Parse, never regex:** safety is decided on a syntax tree (D1), with a function allowlist that
   fails closed (D3) and names read the way SQLite will see them (D2).
@@ -343,6 +377,9 @@ the model then stays loaded for as long as the server runs.
   computed from the characters (D24, D38).
 - **Untrusted data is untrusted:** database values that reach the prompt, including repair
   hints, are filtered, and the limits of that filter are stated (D20).
+- **Who is asking matters:** private values reach the model only as placeholders and the
+  database only as bound parameters (D44); a role limits tables, columns and rows in four
+  layers, the last of them inside SQLite (D45).
 
 ## Project structure
 
@@ -354,14 +391,16 @@ the model then stays loaded for as long as the server runs.
 │   ├── guardrails/      # extract, validate (AST), policy (allowlist), execute (sandbox)
 │   ├── validate/        # value grounding, confidence scoring
 │   ├── providers/       # Ollama, Anthropic, mock behind one interface
-│   ├── eval/            # suites (dev, held-out, adversarial), metrics, durable runner, regression gate
+│   ├── eval/            # suites (dev, held-out, adversarial, privacy, roles), metrics, durable runner, regression gate
 │   ├── db/              # synthetic database builder, Spider loader
+│   ├── privacy.py       # private values → typed placeholders (D44)
+│   ├── authz.py         # bearer tokens, roles, row filters (D45)
 │   └── api.py, cache.py, clarify.py, present.py, questions.py, cli.py, config.py, …
-├── tests/               # 439 tests, including tests/test_security.py, tests/test_repair.py and tests/test_cache.py
+├── tests/               # 636 tests, including test_security.py, test_privacy.py (the leak sweep) and test_authz.py
 ├── scripts/             # run_eval.py, rescore.py, report.py, regression_gate.py
 ├── runs/                # raw eval results (the gate's baselines) and the before-this-change baseline
 ├── regression-gate.json # what the regression gate tolerates
-├── data/                # glossary (the database itself is built by `mizan build-db`)
+├── data/                # glossary, private columns, demo roles (the database itself is built by `mizan build-db`)
 ├── web/index.html       # single-file demo UI
 └── docs/results.md      # generated results
 ```

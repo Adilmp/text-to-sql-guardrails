@@ -158,6 +158,9 @@ def render(runs: list[dict[str, Any]], baseline: list[dict[str, Any]] | None = N
                     out.append(f"| `{rule}` | {count} |")
                 out.append("")
 
+    out += _privacy_section(runs)
+    out += _authz_section(runs)
+
     out += ["## Not measured", ""]
     out += [
         "- **Spider.** The loader exists (`mizan/db/spider.py`) but the benchmark was never",
@@ -185,6 +188,82 @@ _DANGEROUS_RULES = frozenset(
         "unsupported_statement",
     }
 )
+
+
+def _privacy_section(runs: list[dict[str, Any]]) -> list[str]:
+    """The same questions with and without masking: accuracy, and names sent to the model."""
+    pairs: dict[str, dict[str, dict[str, Any]]] = {}
+    for run in runs:
+        if run.get("suite") in ("privacy", "privacy_plain"):
+            pairs.setdefault(run["model"], {})[run["suite"]] = run
+    if not pairs:
+        return []
+    out = [
+        "## Private values (masking)",
+        "",
+        "Eight questions that name a customer, in English, Arabic and Urdu (24 cases), run twice:",
+        "**with masking** (`privacy`: the model sees `:customer_name_1`, the value is bound when",
+        "the query runs) and **without** (`privacy_plain`: the same cases, the names sent as",
+        "typed). *Names sent* counts the cases in which any stored customer name, in any",
+        "spelling, appeared in anything sent to the model (DECISIONS.md D44).",
+        "",
+        "| Model | Run | Strict | English | Arabic | Urdu | Repaired (then right) | Names sent |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for model, by_suite in sorted(pairs.items()):
+        for suite, label in (("privacy", "with masking"), ("privacy_plain", "without masking")):
+            run = by_suite.get(suite)
+            if run is None:
+                continue
+            lang = run.get("by_language", {})
+            sent = run.get("private_values_sent")
+            out.append(
+                f"| `{model}` | {label} | **{run['correct']}/{run['n']} ({run['accuracy']:.1%})** "
+                f"| {_frac(lang.get('en', {}))} | {_frac(lang.get('ar', {}))} "
+                f"| {_frac(lang.get('ur', {}))} | {run['repaired']} ({run['repaired_correct']}) "
+                f"| **{sent if sent is not None else '—'}/{run['n']}** |"
+            )
+    out.append("")
+    return out
+
+
+def _authz_section(runs: list[dict[str, Any]]) -> list[str]:
+    """Questions asked as each demo role: allowed ones scored, denied ones checked for leaks."""
+    authz = [r for r in runs if r.get("suite") == "authz"]
+    if not authz:
+        return []
+    out = [
+        "## Roles (authorization)",
+        "",
+        "Questions asked as the demo roles in `data/gulf_logistics.roles.json`. An **allowed**",
+        "question is scored against the answer *that role* should get, with its row filters",
+        "applied (the Saudi manager's order count is Saudi orders only). A **denied** question",
+        "passes when nothing the role can't see came back; *refused* counts the ones stopped",
+        "as `not_authorized` before anything ran (DECISIONS.md D45).",
+        "",
+        "| Model | Role | Allowed: strict | Denied: nothing leaked | Denied: refused |",
+        "|---|---|---:|---:|---:|",
+    ]
+    for run in authz:
+        roles: dict[str, dict[str, int]] = {}
+        for outcome in run["_outcomes"]:
+            tags = outcome.get("tags", [])
+            role = next((t for t in tags if t not in ("role", "allowed", "denied")), "?")
+            stats = roles.setdefault(role, {"an": 0, "ac": 0, "dn": 0, "dc": 0, "db": 0})
+            if "denied" in tags:
+                stats["dn"] += 1
+                stats["dc"] += int(outcome["correct"])
+                stats["db"] += int("not_authorized" in outcome.get("blocked_rules", []))
+            else:
+                stats["an"] += 1
+                stats["ac"] += int(outcome["correct"])
+        for role, st in sorted(roles.items()):
+            allowed = f"{st['ac']}/{st['an']}" if st["an"] else "—"
+            denied = f"{st['dc']}/{st['dn']}" if st["dn"] else "—"
+            refused = f"{st['db']}/{st['dn']}" if st["dn"] else "—"
+            out.append(f"| `{run['model']}` | `{role}` | {allowed} | {denied} | {refused} |")
+    out.append("")
+    return out
 
 
 def _rules(outcome: dict[str, Any]) -> list[str]:
