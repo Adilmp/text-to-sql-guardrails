@@ -40,7 +40,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from .authz import ADMIN, Principal, Unauthorized, load_authorizer
+from .authz import ADMIN, Principal, RolePolicy, Unauthorized, load_authorizer
 from .cache import AnswerCache, CachedTextToSQL, CacheSettings, canonical_question
 from .clarify import Clarifier
 from .config import Settings
@@ -152,6 +152,16 @@ def create_app(
     #: One serving engine per restricted role, built on first use.
     role_engines: dict[str, CachedTextToSQL] = {}
     role_lock = threading.Lock()
+    #: Whether a role may run a cached query: `(role, sql) -> verdict`. A cached SQL string
+    #: never changes, so /api/suggest needn't re-validate it on every keystroke.
+    suggest_verdicts: dict[tuple[str, str], bool] = {}
+
+    def make_engine(role: RolePolicy | None = None, settings: Settings | None = None) -> TextToSQL:
+        """The one place an engine is built, so a new engine option is added once."""
+        return TextToSQL(
+            state["catalog"], state["provider"], settings or cfg, masker=state["masker"], role=role
+        )
+
     recent_lock = threading.Lock()
     ready = threading.Event()
     stop_keep_warm = threading.Event()
@@ -189,9 +199,7 @@ def create_app(
         # Private values (<db>.privacy.json beside the database) are masked before the model
         # sees a question; without the file, questions go to the model as typed.
         state["masker"] = load_masker(cfg.db_path)
-        state["engine"] = TextToSQL(
-            state["catalog"], state["provider"], cfg, masker=state["masker"]
-        )
+        state["engine"] = make_engine()
         cache = AnswerCache(cache_settings.path) if cache_settings.enabled else None
         state["cache"] = cache
         state["served"] = CachedTextToSQL(state["engine"], cache, cache_settings)
@@ -241,10 +249,9 @@ def create_app(
             return served
         with role_lock:
             if role.name not in role_engines:
-                engine = TextToSQL(
-                    state["catalog"], state["provider"], cfg, masker=state["masker"], role=role
+                role_engines[role.name] = CachedTextToSQL(
+                    make_engine(role), state["cache"], cache_settings
                 )
-                role_engines[role.name] = CachedTextToSQL(engine, state["cache"], cache_settings)
             return role_engines[role.name]
 
     @app.middleware("http")
@@ -359,7 +366,14 @@ def create_app(
             if served is default or cache is None:
                 return True
             known = cache.status(default.context, canonical_question(question))
-            return known is None or validate(known[0], state["catalog"], role=who.role).ok
+            if known is None:
+                return True
+            key = (who.role.name, known[0])
+            if key not in suggest_verdicts:
+                if len(suggest_verdicts) > 5_000:
+                    suggest_verdicts.clear()
+                suggest_verdicts[key] = validate(known[0], state["catalog"], role=who.role).ok
+            return suggest_verdicts[key]
 
         found = state["suggester"].suggest(q, status_of=status_of, limit=limit * 3)
         kept = [s for s in found if allowed(s.question)][:limit]
@@ -367,7 +381,8 @@ def create_app(
 
     @app.get("/api/schema")
     async def schema(who: Principal = Depends(principal)) -> dict[str, Any]:
-        catalog = state["catalog"].restricted(who.role)
+        # The role engine already holds its slice; rebuilding it per request was wasted work.
+        catalog = served_for(who).engine.visible_catalog
         return {
             "ddl": catalog.to_prompt(languages=("ar", "ur")),
             "tables": {
@@ -436,12 +451,9 @@ def create_app(
                 if request.samples > 1:
                     # Several samples are a request for the model's own agreement, so they
                     # bypass the cache.
-                    engine = TextToSQL(
-                        state["catalog"],
-                        state["provider"],
+                    engine = make_engine(
+                        served.engine.role,
                         cfg.model_copy(update={"self_consistency_n": request.samples}),
-                        masker=state["masker"],
-                        role=served.engine.role,
                     )
                     answer = engine.ask(question, context, who.attrs)
                 else:
