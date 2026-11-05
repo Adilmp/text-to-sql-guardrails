@@ -276,14 +276,16 @@ def validate(
 
 # ----------------------------------------------------------------------- placeholders
 
-_QUOTED_PLACEHOLDER_RE = re.compile(r":(\w+)")
+_QUOTED_PLACEHOLDER_RE = re.compile(r":?(\w+)")
 
 
 def _check_placeholders(tree: exp.Expression, issued: frozenset[str]) -> list[Violation]:
     """Only issued placeholders, and never inside quotes.
 
     Quoted, ``':customer_name_1'`` is the literal text, which silently matches no row; it is
-    rejected so the repair loop can say "without quotes" instead of answering 0.
+    rejected so the repair loop can say "without quotes" instead of answering 0. The name
+    quoted without its colon (``'customer_name_1'``) is the same mistake: qwen2.5:7b made it
+    in the privacy eval.
     """
     listed = ", ".join(f":{name}" for name in sorted(issued)) or "none"
     violations: list[Violation] = []
