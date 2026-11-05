@@ -37,6 +37,7 @@ from sqlglot import exp
 
 from .errors import MizanError, SQLParseError
 from .guardrails.validator import DIALECT, parse_sql
+from .schema.catalog import Catalog
 
 #: Row-filter parameters are the requester's attributes: ``:_user_<attribute>``.
 _USER_PARAM_RE = re.compile(r"_user_(\w+)")
@@ -155,8 +156,14 @@ def load_authorizer(db_path: Path) -> Authorizer | None:
     return Authorizer.from_file(path) if path.exists() else None
 
 
-def apply_row_filters(sql: str, principal: Principal) -> tuple[str, dict[str, str]]:
+def apply_row_filters(
+    sql: str, principal: Principal, catalog: Catalog | None = None
+) -> tuple[str, dict[str, str]]:
     """Rewrite every reference to a filtered table, and the parameters to bind.
+
+    With a ``catalog`` the filtered subquery selects only the columns the role can read,
+    not ``*``: SQLite's authorizer counts every column a ``*`` expands to as read, so a table
+    that is both filtered and partly hidden would refuse every query (executor, layer 4).
 
     Runs on SQL that has already passed validation. Every ``exp.Table`` node naming a
     filtered table is replaced, wherever it is (a join, a subquery, a CTE body, a UNION
@@ -176,8 +183,17 @@ def apply_row_filters(sql: str, principal: Principal) -> tuple[str, dict[str, st
         name = table.name.lower()
         condition = filters[name]
         used |= set(_placeholders(condition))
+        columns: list[str | exp.Expression] = ["*"]
+        if catalog is not None and catalog.has_table(name) and principal.role.hides_columns(name):
+            columns = [
+                exp.column(c.name, quoted=True)
+                for c in catalog.table(name).columns
+                if principal.role.can_read(name, c.name)
+            ]
         inner = (
-            exp.select("*").from_(exp.to_identifier(table.name)).where(condition, dialect=DIALECT)
+            exp.select(*columns)
+            .from_(exp.to_identifier(table.name))
+            .where(condition, dialect=DIALECT)
         )
         table.replace(
             exp.Subquery(

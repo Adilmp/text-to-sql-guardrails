@@ -30,9 +30,12 @@ from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..errors import ExecutionError, QueryTimeout
+
+if TYPE_CHECKING:
+    from ..authz import RolePolicy
 from ..logging import get_logger
 
 logger = get_logger("executor")
@@ -127,11 +130,16 @@ def execute(
     max_rows: int = 200,
     timeout_s: float = 5.0,
     params: Mapping[str, str] | None = None,
+    role: RolePolicy | None = None,
 ) -> QueryResult:
     """Run ``sql`` read-only against ``db_path``.
 
     ``params`` binds named placeholders (``:customer_name_1``) as SQLite parameters: the
     values are never part of the SQL text, so they can't change what the statement does.
+
+    ``role`` (authz.py) installs a SQLite authorizer: SQLite itself refuses to read any table
+    or column the role can't, whatever the statement looks like. It is the last of the four
+    authorization layers and assumes nothing about the other three (DECISIONS.md D45).
 
     Raises :class:`QueryTimeout` if the deadline elapses and :class:`ExecutionError` for
     any other database failure.
@@ -174,7 +182,31 @@ def execute(
             with suppress(AttributeError, sqlite3.Error, ValueError):
                 conn.setlimit(length_limit_id, _SQLITE_LENGTH_LIMIT)
 
-        cursor = conn.execute(sql, dict(params or {}))
+        denied: list[str] = []
+        if role is not None:
+            # Installed last, after the PRAGMAs above, so only the statement itself is
+            # authorized. SQLite reports a read with no column (COUNT(*)) as column "".
+            def _authorize(
+                action: int, table: str | None, column: str | None, *_: str | None
+            ) -> int:
+                if (
+                    action == sqlite3.SQLITE_READ
+                    and table
+                    and not role.can_read(table, column or None)
+                ):
+                    denied.append(f"{table}.{column}" if column else table)
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            conn.set_authorizer(_authorize)
+        try:
+            cursor = conn.execute(sql, dict(params or {}))
+        except sqlite3.DatabaseError as exc:
+            if denied and role is not None:
+                raise ExecutionError(
+                    f"role {role.name!r} cannot read {denied[0]}", sql=sql[:200]
+                ) from exc
+            raise
         columns = tuple(d[0] for d in (cursor.description or ()))
         fetched = cursor.fetchmany(max_rows + 1)
         truncated = len(fetched) > max_rows
