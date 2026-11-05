@@ -49,14 +49,15 @@ single-user tool. If it were exposed to real users, §6 lists what would still h
 | Clarifications | The browser sends an option number; only the server's own hint text reaches the model | Smuggling instructions into the question through the clarification |
 | Privacy | Stored values of private columns, emails, phones and ID numbers in a question become typed placeholders before any prompt (D44) | A customer's name or contact details reaching the model |
 | Privacy | Placeholder values bound as SQLite parameters, never written into the SQL | A value changing the statement; values in shown, cached or logged SQL |
-| Privacy | Validator accepts only issued placeholders, never quoted; `:_user_*` reserved | The model reaching a value it wasn't given, or a requester's attribute |
+| Privacy | Validator accepts only issued placeholders, never quoted; `:_user_*` reserved; `@`/`$` parameters refused | The model reaching a value it wasn't given, or a requester's attribute |
 | Privacy | Grounding checks placeholders by column and never suggests values of a private column | "Did you mean" hints sending other customers' names to the model |
 | Privacy | Cache keyed by the masked question; typed placeholder text skips the cache | Names in the cache file; one user's question reading or evicting another's entry |
 | Auth | Bearer token, looked up by SHA-256; 401 before anything runs (D45) | Anyone reaching the data endpoints; identity taken from a request body |
 | Auth | Prompt slice: only the role's tables, columns, joins, definitions and examples | The model (and so the user) learning what a role can't see |
-| Auth | Validator `not_authorized`, fails closed, never repaired | Reads outside the role, including via `*`, subqueries and CTEs; probing through repair |
+| Auth | Validator `not_authorized`, fails closed, never repaired; join keys count as reads | Reads outside the role, including via `*`, subqueries, CTEs, `USING` and `NATURAL` joins; probing through repair |
+| Auth | Repair hints built from the role's slice; placeholders never name a hidden column | The model learning hidden tables or columns from a hint or a placeholder line |
 | Auth | Row filters rewritten into every reference to a filtered table, with the requester's attributes bound | Rows outside the role, through joins, subqueries, CTEs and UNION branches |
-| Auth | SQLite authorizer refuses reads of tables and columns outside the role | Everything above, with the validator and prompt slice bypassed |
+| Auth | SQLite authorizer refuses reads of tables and columns outside the role | Every read form above except a join-only column, with the validator and prompt slice bypassed (§2.9) |
 | Auth | Answer ids bound to their requester; per-role engines and cache contexts | Follow-ups, feedback or cached answers crossing between requesters |
 | Runtime | Read-only URI (`file:...?mode=ro`) | Writes, even with the validator bypassed |
 | Runtime | `PRAGMA query_only = ON` | Writes on a connection that opened read-write |
@@ -81,10 +82,10 @@ deleted, writes would still fail.
 
 Three real vulnerabilities, plus one telemetry failure (§2.4). Two vulnerabilities were found
 by probing, one by static analysis plus an adversarial test that caught what the scanner
-missed. Building masking and roles found four more (§2.5–2.8), each before it shipped: one by
+missed. Building masking and roles found five more (§2.5–2.9), each before it shipped: one by
 reading the grounding code against the new threat (§2.5), one by the privacy eval's leak count
-(§2.6), one by asking what a shared cache key lets a user reach (§2.7) and one by the
-prompt-slice test (§2.8).
+(§2.6), one by asking what a shared cache key lets a user reach (§2.7), one by the
+prompt-slice test (§2.8) and one by code review (§2.9).
 
 ### 2.1 Memory amplification — every limit bounded the wrong dimension
 
@@ -228,6 +229,25 @@ The prompt slice removed a hidden table from the schema, but a worked example st
 `customers`, telling a role without that table that it exists. Examples that touch a hidden
 table are now left out of that role's prompt.
 
+### 2.9 A join key was a lookup oracle through every layer
+
+Found by code review, after the feature's own tests and evals had passed. As the analyst, who
+must not read customer names:
+
+```sql
+SELECT COUNT(*) FROM (SELECT 'Tariq Al Thani' AS name_en) AS g JOIN customers USING (name_en)
+```
+
+returned 1, and 0 for a name that doesn't exist. The validator never saw `name_en`: a `USING`
+key is an identifier, not a column reference. SQLite's authorizer didn't either: it reports no
+`SQLITE_READ` for a column used only to join, so the layer described as holding on its own
+didn't, for this one form. `NATURAL JOIN`, which names no columns at all, had the same hole.
+Join keys now count as reads in the validator, failing closed (a `USING` key against every
+referenced table that has it, a `NATURAL` join against every table it could cover), with
+tests for both. The same review found three smaller gaps, fixed alongside: repair hints naming
+hidden tables, a placeholder line naming a hidden column, and `@name` parameters passing the
+placeholder rule.
+
 ## 3. Confirmed not exploitable
 
 Tested and blocked. Tests pin each so a refactor cannot quietly regress them.
@@ -266,7 +286,8 @@ Tested and blocked. Tests pin each so a refactor cannot quietly regress them.
    all: the local single-user tool.
 5. **`/api/schema` exposes** the requester's schema slice and its low-cardinality sample values.
 6. **Row filters are enforced by the query rewrite only.** The SQLite authorizer limits tables
-   and columns, not rows. Grounding's "did you mean" hints also ignore row filters, so a
+   and columns, not rows, and doesn't see a column used only as a join key (§2.9), so the
+   validator is the only layer that checks join keys. Grounding's "did you mean" hints also ignore row filters, so a
    filtered role can be offered a category value (a city) from another country's rows.
 7. **Only whole stored values are masked.** A first name alone or a misspelled name reaches the
    model as typed (D44). Only the columns listed in `<db>.privacy.json` are private.

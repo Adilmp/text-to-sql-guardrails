@@ -15,21 +15,21 @@ one-off warm-up, which is reported on its own.
 | Model | Cases | Strict | Extra columns allowed | English | Arabic | Urdu | Hard | p50 / p95 latency |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `qwen2.5:0.5b` | 60 | **17/60 (28.3%)** | 17/60 (28.3%) | 10/20 (50%) | 6/20 (30%) | 1/20 (5%) | 1/27 (4%) | 1.4s / 9.0s |
-| `qwen2.5:7b` | 60 | **51/60 (85.0%)** | 51/60 (85.0%) | 18/20 (90%) | 17/20 (85%) | 16/20 (80%) | 21/27 (78%) | 10.1s / 46.8s |
+| `qwen2.5:7b` | 60 | **51/60 (85.0%)** | 51/60 (85.0%) | 18/20 (90%) | 17/20 (85%) | 16/20 (80%) | 21/27 (78%) | 10.2s / 27.9s |
 
 ## Execution accuracy — held-out suite (written before tuning, run once)
 
 | Model | Cases | Strict | Extra columns allowed | English | Arabic | Urdu | Hard | p50 / p95 latency |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `qwen2.5:0.5b` | 24 | **0/24 (0.0%)** | 0/24 (0.0%) | 0/8 (0%) | 0/8 (0%) | 0/8 (0%) | 0/21 (0%) | 7.4s / 10.2s |
-| `qwen2.5:7b` | 24 | **16/24 (66.7%)** | 18/24 (75.0%) | 6/8 (75%) | 5/8 (62%) | 5/8 (62%) | 13/21 (62%) | 22.8s / 50.9s |
+| `qwen2.5:7b` | 24 | **16/24 (66.7%)** | 18/24 (75.0%) | 6/8 (75%) | 5/8 (62%) | 5/8 (62%) | 13/21 (62%) | 15.7s / 25.0s |
 
 ## Execution accuracy — follow-up suite (a question that depends on the one before it)
 
 | Model | Cases | Strict | Extra columns allowed | English | Arabic | Urdu | Hard | p50 / p95 latency |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `qwen2.5:0.5b` | 24 | **3/24 (12.5%)** | 3/24 (12.5%) | 2/8 (25%) | 1/8 (12%) | 0/8 (0%) | — | 2.7s / 11.9s |
-| `qwen2.5:7b` | 24 | **19/24 (79.2%)** | 19/24 (79.2%) | 7/8 (88%) | 7/8 (88%) | 5/8 (62%) | — | 21.0s / 60.9s |
+| `qwen2.5:7b` | 24 | **19/24 (79.2%)** | 19/24 (79.2%) | 7/8 (88%) | 7/8 (88%) | 5/8 (62%) | — | 15.3s / 25.4s |
 
 ## Before and after
 
@@ -39,8 +39,8 @@ value grounding, 120 s timeout) run on today's suites and scored the same way
 
 | Suite | Model | Before (strict) | After (strict) | Before hard | After hard | Before p50 / p95 | After p50 / p95 |
 |---|---|---:|---:|---:|---:|---:|---:|
-| holdout | `qwen2.5:7b` | 7/24 (29.2%) | **16/24 (66.7%)** | 4/21 (19%) | 13/21 (62%) | 12.7s / 77.1s | 22.8s / 50.9s |
-| multilingual | `qwen2.5:7b` | 34/60 (56.7%) | **51/60 (85.0%)** | 6/27 (22%) | 21/27 (78%) | 8.3s / 26.5s | 10.1s / 46.8s |
+| holdout | `qwen2.5:7b` | 7/24 (29.2%) | **16/24 (66.7%)** | 4/21 (19%) | 13/21 (62%) | 12.7s / 77.1s | 15.7s / 25.0s |
+| multilingual | `qwen2.5:7b` | 34/60 (56.7%) | **51/60 (85.0%)** | 6/27 (22%) | 21/27 (78%) | 8.3s / 26.5s | 10.2s / 27.9s |
 
 ### `qwen2.5:0.5b` on the multilingual suite — breakdown
 
@@ -174,7 +174,7 @@ query returning plausible rows scores like a right one.
 | subquery | 3/3 (100%) |
 | value_set | 5/6 (83%) |
 
-**Warm-up** before the first case: 1.7s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
+**Warm-up** before the first case: 252.6s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
 
 **Repair loop:** 1 answer(s) needed at least one repair; 0 of them ended correct.
 
@@ -289,7 +289,7 @@ query returning plausible rows scores like a right one.
 | price_trap | 2/3 (67%) |
 | subquery | 1/6 (17%) |
 
-**Warm-up** before the first case: 1.7s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
+**Warm-up** before the first case: 1.5s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
 
 **Repair loop:** 1 answer(s) needed at least one repair; 1 of them ended correct.
 
@@ -408,7 +408,7 @@ query returning plausible rows scores like a right one.
 | swap_value | 3/3 (100%) |
 | topic_switch | 3/3 (100%) |
 
-**Warm-up** before the first case: 1.6s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
+**Warm-up** before the first case: 1.3s. It depends on what the model server already holds: loading the model and reading the prompt from cold takes about three minutes on this CPU (DECISIONS.md D37).
 
 **Does the confidence score discriminate?**
 
@@ -520,7 +520,7 @@ as `not_authorized` before anything ran (DECISIONS.md D45).
 |---|---|---:|---:|---:|
 | `qwen2.5:7b` | `admin` | 1/1 | — | — |
 | `qwen2.5:7b` | `analyst` | 1/1 | 4/4 | 4/4 |
-| `qwen2.5:7b` | `courier_ops` | 1/2 | 3/3 | 3/3 |
+| `qwen2.5:7b` | `courier_ops` | 1/2 | 3/3 | 1/3 |
 | `qwen2.5:7b` | `ksa_manager` | 7/7 | — | — |
 
 ## Not measured

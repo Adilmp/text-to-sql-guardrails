@@ -5,8 +5,8 @@
   "n": 18,
   "correct": 17,
   "accuracy": 0.9444,
-  "blocked": 7,
-  "executed": 11,
+  "blocked": 5,
+  "executed": 13,
   "by_language": {
     "en": {
       "n": 13,
@@ -62,16 +62,15 @@
     }
   },
   "rejection_rules": {
-    "not_authorized": 12,
-    "unknown_alias": 1
+    "not_authorized": 7
   },
-  "mean_latency_ms": 17147.8,
-  "p50_latency_ms": 4956.3,
-  "p95_latency_ms": 172978.5,
-  "total_seconds": 537.4,
+  "mean_latency_ms": 16490.9,
+  "p50_latency_ms": 4917.9,
+  "p95_latency_ms": 168180.9,
+  "total_seconds": 519.9,
   "correct_relaxed": 11,
   "accuracy_relaxed": 0.6111,
   "repaired": 2,
   "repaired_correct": 2,
-  "warmup_ms": 1296.5
+  "warmup_ms": 1244.3
 }
