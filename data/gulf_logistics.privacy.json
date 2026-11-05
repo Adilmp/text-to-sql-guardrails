@@ -1,0 +1,7 @@
+{
+  "_comment": "Columns whose values are private. A stored value of one of these columns that appears in a question is replaced by a typed placeholder (the prefix plus a number, e.g. :customer_name_1) before the question reaches the model, and bound as a SQLite parameter when the query runs, so the model never sees it. Emails, phone numbers and national ID numbers are masked by shape and need no entry here. Keys are table.column exactly as spelled in the database; prefixes are lower-case and must not start with an underscore (reserved for the requester's own attributes).",
+  "sensitive_columns": {
+    "customers.name_en": "customer_name",
+    "customers.name_ar": "customer_name_ar"
+  }
+}
