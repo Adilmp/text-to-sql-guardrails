@@ -64,3 +64,32 @@ class TestAsk:
 
     def test_samples_out_of_range_rejected(self, client: TestClient) -> None:
         assert client.post("/api/ask", json={"question": "hi", "samples": 99}).status_code == 422
+
+
+class TestFonts:
+    """The page's fonts are served by the app: its CSP blocks every other origin."""
+
+    def test_a_bundled_font_is_served_as_woff2(self, client: TestClient) -> None:
+        response = client.get("/fonts/IBMPlexSans-Regular.woff2")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "font/woff2"
+        assert response.content[:4] == b"wOF2"
+        assert "max-age" in response.headers.get("cache-control", "")
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "OFL-IBMPlexSans.txt",
+            "..%2Findex.html",
+            "../index.html",
+            "%2e%2e%2f%2e%2e%2fpyproject.toml",
+            "nope.woff2",
+        ],
+    )
+    def test_nothing_but_the_bundled_fonts_is_served(self, client: TestClient, name: str) -> None:
+        assert client.get(f"/fonts/{name}").status_code == 404
+
+    def test_the_csp_allows_fonts_from_this_origin_only(self, client: TestClient) -> None:
+        csp = client.get("/").headers["content-security-policy"]
+        assert "font-src 'self'" in csp
+        assert "default-src 'none'" in csp
