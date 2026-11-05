@@ -22,12 +22,16 @@ import json
 import re
 import sqlite3
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..errors import SchemaError
 from ..logging import get_logger
 from ..nl.normalize import normalize_for_matching
+
+if TYPE_CHECKING:
+    from ..authz import RolePolicy
 
 logger = get_logger("schema")
 
@@ -195,6 +199,50 @@ class Catalog:
     @property
     def all_column_names(self) -> frozenset[str]:
         return frozenset(c for t in self.tables.values() for c in t.column_names)
+
+    def restricted(self, role: RolePolicy) -> Catalog:
+        """The catalog as ``role`` may see it: what the model is shown for that role.
+
+        Tables the role can't read are gone, and so are columns it can't read, foreign keys
+        (and so join conditions) touching either, and glossary definitions that mention
+        either. A role that reads everything gets this catalog itself, so its prompt is
+        byte-for-byte the unrestricted one.
+        """
+        if role.tables is None and not role.deny_columns:
+            return self
+        tables: dict[str, Table] = {}
+        for key, table in self.tables.items():
+            if not role.can_read(table.name):
+                continue
+            columns = tuple(c for c in table.columns if role.can_read(table.name, c.name))
+            fks = tuple(
+                fk
+                for fk in table.foreign_keys
+                if role.can_read(table.name, fk.column)
+                and role.can_read(fk.references_table, fk.references_column)
+            )
+            tables[key] = replace(table, columns=columns, foreign_keys=fks)
+        hidden = {t for t in self.tables if t not in tables}
+        hidden_columns = {
+            (t, c)
+            for t, table in self.tables.items()
+            if t in tables
+            for c in table.column_names
+            if not role.can_read(t, c)
+        }
+
+        def visible(definition: Definition) -> bool:
+            words = set(re.findall(r"\w+", definition.sql.lower()))
+            pairs = set(re.findall(r"(\w+)\.(\w+)", definition.sql.lower()))
+            return not (
+                words & hidden or pairs & hidden_columns or words & {c for _, c in hidden_columns}
+            )
+
+        return replace(
+            self,
+            tables=tables,
+            definitions=tuple(d for d in self.definitions if visible(d)),
+        )
 
     # -------------------------------------------------------------- introspection
 

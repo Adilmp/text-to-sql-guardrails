@@ -36,6 +36,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+import sqlglot
+from sqlglot import exp
+
 from ..nl.detect import Script
 from ..schema.catalog import Catalog
 
@@ -131,8 +134,25 @@ def build_system_prompt(
             line = f"  {d.term} = {d.sql}"
             parts.append(f"{line}  -- {d.note}" if d.note else line)
     if include_examples:
-        parts += ["", _EXAMPLES]
+        parts += ["", _examples_for(catalog)]
     return "\n".join(parts)
+
+
+def _examples_for(catalog: Catalog) -> str:
+    """The worked examples whose SQL only uses tables in ``catalog``.
+
+    A role's restricted catalog (authz.py) hides tables; an example querying one would tell
+    the model, and so the user, that it exists. Examples keep their numbers, which the rules
+    refer to. With every table present this is ``_EXAMPLES`` unchanged.
+    """
+    blocks = _EXAMPLES.split("\n\n")
+    kept = [b for b in blocks if all(catalog.has_table(t) for t in _example_tables(b))]
+    return _EXAMPLES if len(kept) == len(blocks) else "\n\n".join(kept)
+
+
+def _example_tables(block: str) -> set[str]:
+    sql = block.split("SQL: ", 1)[-1].replace("\\\n", " ")
+    return {t.name.lower() for t in sqlglot.parse_one(sql, read="sqlite").find_all(exp.Table)}
 
 
 def build_user_prompt(

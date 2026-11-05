@@ -33,6 +33,7 @@ from mizan.authz import (
     apply_row_filters,
     load_authorizer,
 )
+from mizan.errors import ExecutionError
 from mizan.generate.prompt import build_system_prompt
 from mizan.generate.repair import diagnose
 from mizan.guardrails import execute, validate
@@ -321,9 +322,15 @@ class TestRowFilters:
     def test_a_cte_named_after_the_table_cannot_launder_it(
         self, authorizer: Authorizer, db_path: Path
     ) -> None:
+        # SQLite refuses this query outright ("circular reference"), rewritten or not. Either
+        # outcome is safe; returning another country's rows is the only failure.
         ksa = _who(authorizer, "demo-ksa")
         sql = "WITH customers AS (SELECT * FROM customers) SELECT DISTINCT country FROM customers"
-        assert _run(sql, ksa, db_path) == (("Saudi Arabia",),)
+        try:
+            rows = _run(sql, ksa, db_path)
+        except ExecutionError:
+            return
+        assert rows == (("Saudi Arabia",),)
 
     def test_a_union_branch_cannot_escape(self, authorizer: Authorizer, db_path: Path) -> None:
         ksa = _who(authorizer, "demo-ksa")

@@ -1,0 +1,49 @@
+{
+  "_comment": "Demo roles for the local web page. Each token is stored as its SHA-256; the demo tokens themselves (demo-admin, demo-courier-ops, demo-ksa, demo-analyst) are public and listed in web/index.html so the role picker can send them. Replace every token before using this anywhere real. Row filters are trusted SQL conditions written by whoever owns this file; their parameters are the requester's attributes, written :_user_<attribute>, and come from the token, never from the model.",
+  "roles": {
+    "admin": {
+      "tables": "*"
+    },
+    "courier_ops": {
+      "_comment": "Runs deliveries: orders, couriers and warehouses, nothing about customers or products.",
+      "tables": {
+        "orders": "*",
+        "couriers": "*",
+        "warehouses": "*"
+      }
+    },
+    "ksa_manager": {
+      "_comment": "Every table, but only rows for their own country: orders shipped from its warehouses, and its customers.",
+      "tables": "*",
+      "row_filters": {
+        "orders": "warehouse_id IN (SELECT warehouse_id FROM warehouses WHERE country = :_user_country)",
+        "customers": "country = :_user_country"
+      }
+    },
+    "analyst": {
+      "_comment": "Every table and row, but never who a customer is.",
+      "tables": "*",
+      "deny_columns": [
+        "customers.name_en",
+        "customers.name_ar"
+      ]
+    }
+  },
+  "tokens": {
+    "cce7a2cf1ae045989cfc914fb95a41526f167a838b3c7d33745143614abace7c": {
+      "role": "admin"
+    },
+    "4b68d3335c3e680ac57634e45406ee6cfa4fc0836811dc042ba1775643e0de1c": {
+      "role": "courier_ops"
+    },
+    "717d48b6c1584dc2ccc0e39161b9d3697341577293388e6eecc36a0e25b98f44": {
+      "role": "ksa_manager",
+      "attrs": {
+        "country": "Saudi Arabia"
+      }
+    },
+    "cce657f16c436d5357567f215df4e4d5c56f8a19c32916e43562db7905035a04": {
+      "role": "analyst"
+    }
+  }
+}

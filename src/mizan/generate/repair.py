@@ -39,8 +39,10 @@ from ..guardrails.policy import DANGEROUS_RULES
 from ..schema.catalog import Catalog
 from ..validate.grounding import GroundingIssue
 
-#: Rules whose rejection is final: the problem is what the query tries to do.
-FINAL_RULES: frozenset[str] = DANGEROUS_RULES | {"sql_too_long"}
+#: Rules whose rejection is final: the problem is what the query tries to do. A
+#: ``not_authorized`` query is final too: "fix it" would turn the repair loop into a way to
+#: probe what a role is not allowed to see.
+FINAL_RULES: frozenset[str] = DANGEROUS_RULES | {"sql_too_long", "not_authorized"}
 
 _AMBIGUOUS_RE = re.compile(r"ambiguous column name: (\S+)", re.IGNORECASE)
 _NO_COLUMN_RE = re.compile(r"no such column: (\S+)", re.IGNORECASE)
