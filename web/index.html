@@ -5,160 +5,205 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Text-to-SQL Guardrails</title>
 <style>
+  /* Fonts are served by this app (CSP: font-src 'self'): IBM Plex Sans for Latin and IBM Plex
+     Sans Arabic for Arabic and Urdu, picked per character by unicode-range. */
+  @font-face { font-family: "Plex"; font-weight: 400; font-display: swap;
+    src: url(/fonts/IBMPlexSans-Regular.woff2) format("woff2"); }
+  @font-face { font-family: "Plex"; font-weight: 500; font-display: swap;
+    src: url(/fonts/IBMPlexSans-Medium.woff2) format("woff2"); }
+  @font-face { font-family: "Plex"; font-weight: 400; font-display: swap;
+    src: url(/fonts/IBMPlexSansArabic-Regular.woff2) format("woff2");
+    unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF; }
+  @font-face { font-family: "Plex"; font-weight: 500; font-display: swap;
+    src: url(/fonts/IBMPlexSansArabic-Medium.woff2) format("woff2");
+    unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF; }
+
   :root {
-    --bg: #fbfbfa; --panel: #ffffff; --ink: #1a1a18; --muted: #6b6b66;
-    --line: #e4e4df; --accent: #2f6f5f; --danger: #a8352c; --warn: #9a6b1f;
-    --code-bg: #f5f5f2;
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #18181b; --muted: #5c5c61; --faint: #85858b;
+    --line: #e4e4df; --soft: #efefeb;
+    --accent: #2f6f5f; --accent-bg: #2f6f5f14; --danger: #a8352c; --danger-bg: #a8352c12;
+    --warn: #8a5a12; --warn-bg: #9a6b1f17;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #17181a; --panel: #1f2023; --ink: #e8e8e4; --muted: #9a9a93;
-      --line: #33343a; --accent: #6bbfa3; --danger: #e0796f; --warn: #d6a94e;
-      --code-bg: #141517;
+      --bg: #141416; --panel: #1c1c1f; --ink: #ececea; --muted: #a6a6ab; --faint: #77777d;
+      --line: #2d2d32; --soft: #232327;
+      --accent: #6bbfa3; --accent-bg: #6bbfa31c; --danger: #e5847b; --danger-bg: #e5847b17;
+      --warn: #d9ab55; --warn-bg: #d9ab5517;
     }
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 2rem 1rem; background: var(--bg); color: var(--ink);
-    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  .wrap { max-width: 860px; margin: 0 auto; }
-  header { margin-bottom: 1.75rem; }
-  h1 { margin: 0 0 .25rem; font-size: 1.6rem; letter-spacing: -.01em; }
-  h1 span { color: var(--accent); font-weight: 500; }
-  .sub { color: var(--muted); font-size: .9rem; margin: 0; }
-  .who { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .8rem;
-    font-size: .88rem; color: var(--muted); }
-  .who select { font: inherit; color: var(--ink); background: var(--panel);
-    border: 1px solid var(--line); border-radius: 6px; padding: .25rem .45rem; }
-  .who .role-note { color: var(--ink); }
-  .private { color: var(--muted); font-size: .85rem; margin-top: .45rem; }
-  .private code { font-family: var(--mono); font-size: .82rem; }
-  form { display: flex; gap: .5rem; margin-bottom: 1rem; }
-  input[type=text] {
-    flex: 1; padding: .7rem .85rem; font-size: 1rem; font-family: inherit;
-    background: var(--panel); color: var(--ink);
-    border: 1px solid var(--line); border-radius: 8px;
-  }
-  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  button {
-    padding: .7rem 1.2rem; font-size: 1rem; font-family: inherit; cursor: pointer;
-    background: var(--accent); color: #fff; border: 0; border-radius: 8px;
-  }
-  button:disabled { opacity: .55; cursor: progress; }
-  .examples { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.5rem; }
-  .examples button {
-    background: transparent; color: var(--muted); border: 1px solid var(--line);
-    padding: .3rem .65rem; font-size: .82rem; border-radius: 999px;
-  }
-  .card {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 10px; padding: 1rem 1.15rem; margin-bottom: .9rem;
-  }
-  .card h2 {
-    margin: 0 0 .6rem; font-size: .72rem; text-transform: uppercase;
-    letter-spacing: .07em; color: var(--muted); font-weight: 600;
-  }
-  pre {
-    margin: 0; padding: .8rem; background: var(--code-bg); border-radius: 6px;
-    font-family: var(--mono); font-size: .86rem; overflow-x: auto; white-space: pre-wrap;
-  }
-  .rtl { direction: rtl; text-align: right; }
-  table { width: 100%; border-collapse: collapse; font-size: .88rem; }
-  .scroll { overflow-x: auto; }
-  th, td { padding: .45rem .6rem; text-align: left; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 600; font-size: .78rem; text-transform: uppercase; }
-  .badge {
-    display: inline-block; padding: .18rem .55rem; border-radius: 999px;
-    font-size: .76rem; font-weight: 600;
-  }
-  .high { background: #2f6f5f22; color: var(--accent); }
-  .medium { background: #9a6b1f22; color: var(--warn); }
-  .low { background: #a8352c22; color: var(--danger); }
-  .violation { color: var(--danger); font-family: var(--mono); font-size: .85rem; }
-  .note { color: var(--warn); font-size: .85rem; }
-  .meta { color: var(--muted); font-size: .8rem; }
-  .bar { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: .5rem; }
-  .bar > div { height: 100%; background: var(--accent); }
-  /* !important: components declared later (.thread, .who) set display: flex, which would
-     otherwise win over this same-specificity rule and keep a "hidden" element on screen. */
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 "Plex", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 1rem; min-height: 100vh;
+    min-height: 100dvh; display: flex; flex-direction: column; }
+  .thread { flex: 1; }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .hidden { display: none !important; }
-  /* The mock provider returns canned SQL from a fixture table. Without a visible marker
-     its output is indistinguishable from a real model's, which is genuinely misleading —
-     it is the exact confusion that prompted adding this. */
-  .banner {
-    margin-top: .9rem; padding: .6rem .8rem; border-radius: 8px; font-size: .85rem;
-    border: 1px solid var(--warn); color: var(--warn); background: #9a6b1f14;
-  }
-  .banner.live { border-color: var(--accent); color: var(--accent); background: #2f6f5f14; }
-  /* The answer, as one line in the question's language (built from the result, present.py). */
-  .answer { font-size: 1.3rem; font-weight: 600; line-height: 1.45; unicode-bidi: plaintext; }
-  /* Suggestions under the question box. */
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  /* Header: the name, a quiet status, the role as an account menu. */
+  .top { display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+    flex-wrap: wrap; padding: 1rem 0 .75rem; }
+  .brand { display: flex; align-items: baseline; gap: .75rem; flex-wrap: wrap; }
+  .brand h1 { margin: 0; font-size: 1.05rem; font-weight: 500; letter-spacing: -.005em; }
+  .status { display: inline-flex; align-items: center; gap: .4rem; font-size: .8rem;
+    color: var(--muted); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .dot.ok { background: var(--accent); } .dot.warn { background: var(--warn); }
+  .dot.bad { background: var(--danger); }
+  .who { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); }
+  .who select { background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+    padding: .3rem .8rem; color: var(--ink); }
+  .status-detail { margin: 0 0 1rem; font-size: .85rem; color: var(--muted); }
+
+  /* The conversation. */
+  .thread { padding-bottom: 1rem; }
+  .turn { padding: 1.25rem 0 1.75rem; border-top: 1px solid var(--line); }
+  .turn:first-child { border-top: 0; }
+  .q { margin: 0 0 .9rem; color: var(--muted); unicode-bidi: plaintext; }
+  .context { margin: -.6rem 0 .9rem; font-size: .82rem; color: var(--faint); unicode-bidi: plaintext; }
+  .answer { margin: 0; font-size: 1.55rem; font-weight: 500; line-height: 1.35;
+    letter-spacing: -.01em; unicode-bidi: plaintext; }
+  .how { margin: .35rem 0 0; color: var(--muted); font-size: .9rem; unicode-bidi: plaintext; }
+  .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: .9rem 0 0; }
+  .chip { display: inline-flex; align-items: center; gap: .35rem; font-size: .78rem;
+    padding: .2rem .6rem; border-radius: 999px; background: var(--soft); color: var(--muted); }
+  .chip.ok { background: var(--accent-bg); color: var(--accent); }
+  .chip.warn { background: var(--warn-bg); color: var(--warn); }
+  .chip svg { width: 13px; height: 13px; flex: none; }
+  .chart { margin: 1.1rem 0 .2rem; }
+  svg.plot { width: 100%; height: auto; display: block; }
+  svg.plot .bar-fill { fill: var(--accent); }
+  svg.plot .line { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+  svg.plot .dotp { fill: var(--accent); }
+  svg.plot .axis { stroke: var(--line); }
+  svg.plot text { fill: var(--ink); font: 12px "Plex", system-ui, sans-serif; }
+  svg.plot text.muted { fill: var(--muted); font-size: 11px; }
+
+  /* What's under the answer: table, working, feedback. */
+  .under { display: flex; flex-wrap: wrap; align-items: flex-start; gap: .25rem 1.25rem;
+    margin-top: 1rem; }
+  details.more { flex: 1 1 100%; }
+  details.more > summary { display: inline-flex; align-items: center; gap: .35rem;
+    color: var(--muted); font-size: .85rem; cursor: pointer; list-style: none; padding: .15rem 0; }
+  details.more > summary::-webkit-details-marker { display: none; }
+  details.more > summary::before { content: "›"; display: inline-block; width: .7em;
+    transition: transform .15s ease; }
+  details.more[open] > summary::before { transform: rotate(90deg); }
+  details.more > summary:hover { color: var(--ink); }
+  .panel { margin: .6rem 0 .4rem; padding: .9rem 1rem; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; }
+  .row-actions { display: flex; gap: .4rem; margin-bottom: .6rem; flex-wrap: wrap; }
+  .row-actions button, .feedback button, .ghost { background: transparent;
+    border: 1px solid var(--line); border-radius: 7px; padding: .2rem .65rem; font-size: .8rem;
+    color: var(--muted); }
+  .row-actions button:hover, .feedback button:hover, .ghost:hover { color: var(--ink);
+    border-color: var(--faint); }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .88rem;
+    font-variant-numeric: tabular-nums; }
+  th, td { padding: .4rem .6rem; text-align: start; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; font-size: .8rem; }
+  pre { margin: 0; padding: .7rem .8rem; background: var(--soft); border-radius: 8px;
+    font: .8rem/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; }
+  .step-list { margin: 0 0 .8rem; color: var(--ink); unicode-bidi: plaintext; }
+  .small { font-size: .82rem; color: var(--muted); }
+  .small + .small { margin-top: .25rem; }
+  .feedback { display: flex; align-items: center; gap: .4rem; font-size: .82rem;
+    color: var(--faint); margin-inline-start: auto; }
+
+  /* Refusals and the blocked moment. */
+  .refusal h2, .blocked h2, .unsure h2 { margin: 0; font-size: 1.15rem; font-weight: 500; }
+  .refusal p, .blocked p, .unsure p { margin: .35rem 0 0; color: var(--muted); }
+  .blocked { display: flex; gap: .9rem; align-items: flex-start; padding: 1rem 1.1rem;
+    border-radius: 12px; background: var(--accent-bg); }
+  .blocked svg { width: 28px; height: 28px; flex: none; color: var(--accent); }
+  .blocked h2 { color: var(--accent); }
+  .reasons { margin: .5rem 0 0; padding-inline-start: 1.1rem; color: var(--muted);
+    font-size: .85rem; font-family: var(--mono); }
+  .choices { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .8rem; }
+  .choices button { background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+    padding: .4rem .9rem; unicode-bidi: plaintext; }
+  .choices button:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Waiting: say what is happening, honestly. */
+  .pending { display: flex; align-items: center; gap: .6rem; color: var(--muted); }
+  .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line);
+    border-top-color: var(--accent); animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .pending-note { margin: .4rem 0 0; font-size: .82rem; color: var(--faint); }
+  .skeleton { height: 1.4rem; width: 55%; margin-top: .9rem; border-radius: 6px;
+    background: var(--soft); }
+
+  /* The empty state: a start, not a blank box. */
+  .empty { padding: 2.5rem 0 1.5rem; }
+  .empty h2 { margin: 0; font-size: 1.7rem; font-weight: 500; letter-spacing: -.015em; }
+  .empty .lead { margin: .4rem 0 1.75rem; color: var(--muted); }
+  .groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1.5rem 1.75rem; }
+  .group h3 { margin: 0 0 .5rem; font-size: .82rem; font-weight: 500; color: var(--faint); }
+  .group button { display: block; width: 100%; text-align: start; background: none; border: 0;
+    padding: .3rem 0; color: var(--ink); unicode-bidi: plaintext; }
+  .group button:hover { color: var(--accent); }
+  .group.attack h3 { color: var(--danger); }
+  .group.attack button { color: var(--danger); }
+  .group.attack button:hover { text-decoration: underline; }
+  .help-row { margin-top: 1.75rem; }
+  .topics { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: .9rem 1.25rem; margin-top: .9rem; }
+  .topics b { font-weight: 500; display: block; text-transform: capitalize; }
+  .topics .alias { color: var(--faint); unicode-bidi: plaintext; font-size: .82rem; }
+  .topics div { font-size: .87rem; color: var(--muted); }
+
+  /* The composer stays at the bottom, like every chat people already know. */
+  .composer { position: sticky; bottom: 0; background: var(--bg); padding: .6rem 0 .9rem;
+    border-top: 1px solid var(--line); }
+  .followup { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap;
+    font-size: .82rem; color: var(--muted); margin-bottom: .45rem; }
+  .followup q { color: var(--ink); unicode-bidi: plaintext; }
+  .followup button { background: none; border: 0; padding: 0; color: var(--accent);
+    font-size: .82rem; text-decoration: underline; }
+  .bar { display: flex; gap: .5rem; }
   .field { position: relative; flex: 1; display: flex; }
-  .field input[type=text] { width: 100%; }
-  .suggest {
-    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 10;
+  .field input { width: 100%; padding: .7rem .9rem; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--panel); unicode-bidi: plaintext; }
+  .field input:focus { outline: none; border-color: var(--accent); }
+  #go { border: 0; border-radius: 10px; padding: 0 1.15rem; background: var(--accent);
+    color: var(--panel); font-weight: 500; }
+  #go:disabled { opacity: .55; cursor: default; }
+  .keys { margin: .4rem 0 0; font-size: .75rem; color: var(--faint); }
+  .keys kbd { font: .72rem var(--mono); padding: 0 .3rem; border: 1px solid var(--line);
+    border-radius: 4px; }
+  .suggest { position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 10;
     margin: 0; padding: .3rem 0; list-style: none; background: var(--panel);
-    border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px #0002;
-    max-height: 22rem; overflow-y: auto;
+    border: 1px solid var(--line); border-radius: 10px; max-height: 20rem; overflow-y: auto; }
+  .suggest li { padding: .45rem .85rem; cursor: pointer; display: flex; gap: .6rem;
+    justify-content: space-between; align-items: baseline; unicode-bidi: plaintext; }
+  .suggest li[aria-selected="true"], .suggest li:hover { background: var(--soft); }
+  .suggest .tag { color: var(--accent); font-size: .74rem; white-space: nowrap; }
+  @media (max-width: 560px) {
+    .answer { font-size: 1.35rem; }
+    .keys { display: none; }
+    .feedback { margin-inline-start: 0; }
   }
-  .suggest li {
-    padding: .45rem .8rem; cursor: pointer; display: flex; gap: .6rem;
-    justify-content: space-between; align-items: baseline; unicode-bidi: plaintext;
+  @media (prefers-reduced-motion: reduce) {
+    .spinner { animation: none; }
+    details.more > summary::before { transition: none; }
   }
-  .suggest li[aria-selected="true"], .suggest li:hover { background: var(--code-bg); }
-  .suggest .tag { color: var(--accent); font-size: .72rem; white-space: nowrap; }
-  /* Small secondary buttons: CSV, copy. */
-  .actions { display: flex; gap: .4rem; margin: -.2rem 0 .6rem; }
-  .actions button {
-    background: transparent; color: var(--accent); border: 1px solid var(--line);
-    padding: .25rem .65rem; font-size: .78rem; border-radius: 6px;
-  }
-  /* Charts are inline SVG: the page's CSP allows no external scripts, and none are needed. */
-  svg.chart { width: 100%; height: auto; display: block; }
-  svg.chart .bar-fill { fill: var(--accent); opacity: .85; }
-  svg.chart .line { fill: none; stroke: var(--accent); stroke-width: 2.5; }
-  svg.chart .dot { fill: var(--accent); }
-  svg.chart .axis { stroke: var(--line); }
-  svg.chart text { fill: var(--ink); font: 12px system-ui, sans-serif; }
-  svg.chart text.muted { fill: var(--muted); font-size: 11px; }
-  .how { color: var(--muted); font-size: .88rem; margin-top: .45rem; unicode-bidi: plaintext; }
-  .feedback { display: flex; gap: .4rem; align-items: center; margin-top: .7rem;
-    font-size: .82rem; color: var(--muted); }
-  .feedback button { background: transparent; border: 1px solid var(--line);
-    padding: .15rem .55rem; font-size: .95rem; border-radius: 6px; }
-  .flag { display: inline-block; margin-top: .6rem; font-size: .8rem; font-weight: 600; }
-  .flag.ok { color: var(--accent); }
-  .flag.bad { color: var(--danger); }
-  details.tech > summary { cursor: pointer; color: var(--muted); font-size: .85rem;
-    margin: .2rem 0 .9rem; }
-  .help-link { background: none; border: 0; padding: 0; color: var(--accent);
-    font-size: .85rem; cursor: pointer; text-decoration: underline; margin: -.4rem 0 1rem; }
-  .topics { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-    gap: .6rem; }
-  .topics > div { border: 1px solid var(--line); border-radius: 8px; padding: .55rem .7rem;
-    font-size: .85rem; }
-  .topics b { display: block; }
-  .topics .alias { color: var(--muted); unicode-bidi: plaintext; }
-  .thread { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap;
-    color: var(--muted); font-size: .82rem; margin: -.5rem 0 1rem; }
-  .thread q { unicode-bidi: plaintext; color: var(--ink); }
-  .thread button, .context button { background: none; border: 0; padding: 0;
-    color: var(--accent); font-size: .82rem; cursor: pointer; text-decoration: underline; }
-  .context { color: var(--muted); font-size: .82rem; margin-top: .35rem; unicode-bidi: plaintext; }
-  .choices { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .7rem; }
-  .choices button { background: transparent; color: var(--accent);
-    border: 1px solid var(--accent); padding: .45rem .8rem; font-size: .92rem; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <h1>Text-to-SQL <span>Guardrails</span></h1>
-    <p class="sub">Ask in English, Arabic or Urdu. Every query is validated against the
-      real schema before it is allowed to run.</p>
-    <div id="banner" class="banner hidden"></div>
+  <header class="top">
+    <div class="brand">
+      <h1>Text-to-SQL Guardrails</h1>
+      <span class="status" id="status"><span class="dot" id="dot"></span><span id="status-text">Connecting</span></span>
+    </div>
     <div class="who hidden" id="who">
       <label for="role">Signed in as</label>
       <select id="role">
@@ -167,43 +212,82 @@
         <option value="ksa_manager">Saudi Arabia manager</option>
         <option value="analyst">Analyst</option>
       </select>
-      <span class="role-note" id="role-note"></span>
     </div>
   </header>
+  <p class="status-detail hidden" id="status-detail"></p>
 
-  <form id="form">
-    <div class="field">
-      <input id="q" type="text" dir="auto" placeholder="Ask in English, Arabic or Urdu…"
-        autocomplete="off" autofocus role="combobox" aria-autocomplete="list"
-        aria-controls="suggest" aria-expanded="false">
-      <ul id="suggest" class="suggest hidden" role="listbox"></ul>
+  <section class="empty" id="empty">
+    <h2>Ask your data</h2>
+    <p class="lead">In English, Arabic or Urdu. Every query is checked against the real schema
+      before it runs<span id="role-note"></span>.</p>
+    <div class="groups" id="groups"></div>
+    <div class="help-row">
+      <button type="button" class="ghost" id="help-link">What's in the data?</button>
+      <div class="hidden" id="help"></div>
     </div>
-    <button id="go" type="submit">Ask</button>
+  </section>
+
+  <main class="thread" id="thread" aria-live="polite"></main>
+
+  <form class="composer" id="form">
+    <div class="followup hidden" id="followup"></div>
+    <div class="bar">
+      <div class="field">
+        <label for="q" class="sr-only">Your question</label>
+        <input id="q" type="text" dir="auto" placeholder="Ask in English, Arabic or Urdu"
+          autocomplete="off" autofocus role="combobox" aria-autocomplete="list"
+          aria-controls="suggest" aria-expanded="false">
+        <ul id="suggest" class="suggest hidden" role="listbox"></ul>
+      </div>
+      <button id="go" type="submit">Ask</button>
+    </div>
+    <p class="keys"><kbd>/</kbd> to type · <kbd>Enter</kbd> to ask · <kbd>↑</kbd> to edit your last question · <kbd>Esc</kbd> to clear</p>
   </form>
-
-  <div class="thread hidden" id="thread"></div>
-  <div class="examples" id="examples"></div>
-  <button type="button" class="help-link" id="help-link">What can I ask?</button>
-  <div class="card hidden" id="help"></div>
-
-  <div id="out"></div>
 </div>
 
 <script>
-const EXAMPLES = [
-  "how many orders were delivered late?",
-  "which courier delivered late most often?",
-  "كم عدد الطلبات المتأخرة في دبي؟",
-  "ما متوسط قيمة الطلب لكل مدينة؟",
-  "کتنے آرڈر ابھی تک ڈیلیور نہیں ہوئے؟",
-  "drop the orders table",
+// The page's example questions, in three groups. The first five are also pre-filled into the
+// answer cache (questions.EXAMPLES); the attacks are here on purpose, to show the guardrails.
+const GROUPS = [
+  { title: "Deliveries", items: [
+    "how many orders were delivered late?",
+    "which courier delivered late most often?",
+    "کتنے آرڈر ابھی تک ڈیلیور نہیں ہوئے؟",
+  ] },
+  { title: "Customers and money", items: [
+    "كم عدد الطلبات المتأخرة في دبي؟",
+    "ما متوسط قيمة الطلب لكل مدينة؟",
+    "how many orders did Tariq Al Thani place?",
+  ] },
+  { title: "Try to break it", attack: true, items: [
+    "drop the orders table",
+    "delete every customer",
+    "read the file /etc/passwd",
+  ] },
 ];
 
-const LANGUAGE = {en: "English", ar: "Arabic", ur: "Urdu", mixed: "Arabic + English"};
+const LANGUAGE = { en: "English", ar: "Arabic", ur: "Urdu", mixed: "Arabic and English" };
+// Rules that mean the query tried something harmful, not just something wrong.
+const DANGEROUS = ["write_operation", "dangerous_statement", "denied_function",
+  "stacked_statements", "unsupported_statement"];
 
-const out = document.getElementById("out");
+const threadEl = document.getElementById("thread");
+const emptyEl = document.getElementById("empty");
 const qEl = document.getElementById("q");
 const goEl = document.getElementById("go");
+const formEl = document.getElementById("form");
+
+const esc = (s) => String(s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const ICON = {
+  check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg>',
+  lock: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/></svg>',
+  filter: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 3.5h11l-4.2 5v4l-2.6 1v-5z"/></svg>',
+  bolt: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z"/></svg>',
+  alert: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 2l6.5 11.5h-13z"/><path d="M8 6.5v3M8 11.5v.2"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 2.5l8 3v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10v-6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>',
+};
 
 // ------------------------------------------------------------------------- demo sign-in
 // With a roles file next to the database the server answers only requests that carry a
@@ -211,58 +295,68 @@ const goEl = document.getElementById("go");
 // public demo tokens: data/gulf_logistics.roles.json stores only their SHA-256. A real
 // deployment issues its own tokens and never ships them in a page.
 const DEMO_ROLES = {
-  admin: { token: "demo-admin", note: "sees everything." },
-  courier_ops: { token: "demo-courier-ops", note: "orders, couriers and warehouses only." },
-  ksa_manager: { token: "demo-ksa", note: "only Saudi Arabia's orders and customers." },
-  analyst: { token: "demo-analyst", note: "everything except who each customer is." },
+  admin: { token: "demo-admin", note: "", chip: "" },
+  courier_ops: { token: "demo-courier-ops", note: "orders, couriers and warehouses only",
+    chip: "Orders, couriers and warehouses only" },
+  ksa_manager: { token: "demo-ksa", note: "Saudi Arabia's orders and customers only",
+    chip: "Saudi Arabia's rows only" },
+  analyst: { token: "demo-analyst", note: "everything except who each customer is",
+    chip: "Customer names hidden" },
 };
 const whoEl = document.getElementById("who");
 const roleEl = document.getElementById("role");
 const roleNoteEl = document.getElementById("role-note");
+let authRequired = false;
 try {
   const saved = localStorage.getItem("mizan-role");
   if (saved && DEMO_ROLES[saved]) roleEl.value = saved;
 } catch { /* storage can be unavailable; the default role is fine */ }
-function showRole() { roleNoteEl.textContent = DEMO_ROLES[roleEl.value].note; }
-showRole();
+const role = () => DEMO_ROLES[roleEl.value];
+const roleName = () => roleEl.options[roleEl.selectedIndex].text;
+function showRole() {
+  const note = role().note;
+  roleNoteEl.textContent = authRequired && note ? `. Signed in as ${roleName()}: ${note}` : "";
+}
 
 // Every request goes through here, so none can forget the token. A server without a roles
 // file ignores it.
 function api(path, init = {}) {
   const headers = new Headers(init.headers || {});
-  headers.set("Authorization", `Bearer ${DEMO_ROLES[roleEl.value].token}`);
+  headers.set("Authorization", `Bearer ${role().token}`);
   return fetch(path, { ...init, headers });
 }
 
-// Announce which backend is serving, and whether it is ready. On the mock provider the SQL
-// comes from a fixture table, not from a model, and saying so up front is the difference
-// between a demo and a magic trick. On a live model the server reads its prompt once at
-// startup (minutes on a CPU); saying "warming up" beats a counter that looks like a hang.
-const banner = document.getElementById("banner");
+// ------------------------------------------------------------------------------- status
+// Which backend is serving, and whether it is ready. On the mock provider the SQL comes from
+// a fixture table, not a model, and saying so is the difference between a demo and a magic
+// trick. A live model reads its prompt once after a cold start (minutes on a CPU).
+const dotEl = document.getElementById("dot");
+const statusTextEl = document.getElementById("status-text");
+const statusDetailEl = document.getElementById("status-detail");
+function setStatus(kind, text, detail = "") {
+  dotEl.className = `dot ${kind}`;
+  statusTextEl.textContent = text;
+  statusDetailEl.textContent = detail;
+  statusDetailEl.classList.toggle("hidden", !detail);
+}
 function showHealth(h) {
-  whoEl.classList.toggle("hidden", !h.auth);
-  banner.classList.remove("hidden");
+  authRequired = Boolean(h.auth);
+  whoEl.classList.toggle("hidden", !authRequired);
+  showRole();
   if (h.provider === "mock") {
-    banner.textContent = "Mock backend — SQL comes from a fixture table, not a model. "
-      + "The guardrails, schema validation and execution are real. "
-      + "Run with MIZAN_PROVIDER=ollama for genuine generation.";
-    return;
-  }
-  const cached = h.cached_answers ? ` ${Number(h.cached_answers)} answers cached.` : "";
-  if (h.warmup === "failed") {
-    banner.classList.remove("live");
-    banner.textContent = `${h.provider}/${h.model} did not respond to the warm-up. `
-      + "Check that the model server is running (mizan health); questions will fail until it is.";
+    setStatus("warn", "Demo mode", "Demo mode: answers come from a fixture table, not a model. "
+      + "The checks, the roles and the database are real.");
+  } else if (h.warmup === "failed") {
+    setStatus("bad", "Model not responding", `${h.provider}/${h.model} didn't answer its warm-up. `
+      + "Check that the model server is running (mizan health).");
   } else if (h.warming_up) {
-    banner.classList.remove("live");
-    banner.textContent = `Warming up ${h.provider}/${h.model}: the model is reading its `
-      + "prompt, once, after a cold start (a few minutes on a CPU). "
-      + "A question asked now waits for it.";
+    setStatus("warn", "Warming up", "The model is reading its instructions once after starting, "
+      + "which takes a few minutes on a CPU. A question asked now waits for it.");
     setTimeout(checkHealth, 5000);
   } else {
-    banner.classList.add("live");
-    banner.textContent = `Ready: ${h.provider}/${h.model}. New questions take seconds; `
-      + `repeated ones come from the cache in milliseconds.${cached}`;
+    setStatus("ok", "Ready");
+    statusTextEl.title = `${h.provider}/${h.model}`
+      + (h.cached_answers ? `, ${Number(h.cached_answers)} answers cached` : "");
   }
 }
 function checkHealth() {
@@ -270,46 +364,53 @@ function checkHealth() {
 }
 checkHealth();
 
-const examplesEl = document.getElementById("examples");
-for (const ex of EXAMPLES) {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.textContent = ex;
-  b.onclick = () => { clearThread(); qEl.value = ex; document.getElementById("form").requestSubmit(); };
-  examplesEl.appendChild(b);
+// ----------------------------------------------------------------------------- examples
+const groupsEl = document.getElementById("groups");
+for (const g of GROUPS) {
+  const div = document.createElement("div");
+  div.className = `group${g.attack ? " attack" : ""}`;
+  div.innerHTML = `<h3>${esc(g.title)}</h3>`;
+  for (const item of g.items) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dir = "auto";
+    b.textContent = item;
+    b.onclick = () => { clearFollowUp(); ask(item); };
+    div.appendChild(b);
+  }
+  groupsEl.appendChild(div);
 }
-
-const esc = (s) => String(s).replace(/[&<>"']/g, c =>
-  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 // -------------------------------------------------------------------- follow-up thread
 // After an answer, the next question is sent as a follow-up to it ("and in Riyadh?"), the
 // way people ask. The server looks the earlier answer up by id; one click starts afresh.
-const threadEl = document.getElementById("thread");
+const followUpEl = document.getElementById("followup");
 const PLACEHOLDER = qEl.placeholder;
-let thread = null;
-function drawThread() {
-  if (!thread) {
-    threadEl.classList.add("hidden");
+let followUp = null, lastQuestion = "";
+function drawFollowUp() {
+  if (!followUp) {
+    followUpEl.classList.add("hidden");
     qEl.placeholder = PLACEHOLDER;
     return;
   }
-  threadEl.innerHTML = `↳ Your next question follows up on <q>${esc(thread.question)}</q>`
-    + `<button type="button" id="new-q">Start a new question instead</button>`;
-  threadEl.classList.remove("hidden");
-  qEl.placeholder = "Ask a follow-up (e.g. “and in Riyadh?”) or anything else…";
-  document.getElementById("new-q").onclick = () => { clearThread(); qEl.focus(); };
+  followUpEl.innerHTML = `Following up on <q>${esc(followUp.question)}</q>`
+    + `<button type="button" id="new-q">New question</button>`;
+  followUpEl.classList.remove("hidden");
+  qEl.placeholder = "Ask a follow-up, like “and in Riyadh?”";
+  document.getElementById("new-q").onclick = () => { clearFollowUp(); qEl.focus(); };
 }
-function clearThread() { thread = null; drawThread(); }
+function clearFollowUp() { followUp = null; drawFollowUp(); }
 
 // Switching role starts over: the server won't continue another requester's conversation,
-// and an answer on screen was filtered for the previous role.
+// and answers on screen were filtered for the previous role.
 roleEl.onchange = () => {
   try { localStorage.setItem("mizan-role", roleEl.value); } catch { /* optional */ }
   showRole();
-  clearThread();
-  out.innerHTML = "";
+  clearFollowUp();
+  threadEl.innerHTML = "";
+  emptyEl.classList.remove("hidden");
   helpEl.classList.add("hidden");
+  helpEl.innerHTML = "";
 };
 
 // ---------------------------------------------------------------- suggestions as you type
@@ -317,7 +418,6 @@ roleEl.onchange = () => {
 // cached ones first and marked "instant", because picking one answers in milliseconds.
 const suggestEl = document.getElementById("suggest");
 let suggestions = [], picked = -1, suggestSeq = 0, suggestTimer = null;
-
 function closeSuggestions() {
   suggestEl.classList.add("hidden");
   qEl.setAttribute("aria-expanded", "false");
@@ -328,16 +428,16 @@ function drawSuggestions() {
   suggestEl.innerHTML = suggestions.map((s, i) =>
     `<li role="option" id="sg-${i}" aria-selected="${i === picked}" data-i="${i}">`
     + `<span>${esc(s.question)}</span>`
-    + (s.verified ? `<span class="tag">✓ verified</span>`
-      : s.instant ? `<span class="tag">⚡ instant</span>` : "") + `</li>`).join("");
+    + (s.verified ? `<span class="tag">Verified</span>` : s.instant ? `<span class="tag">Instant</span>` : "")
+    + `</li>`).join("");
   suggestEl.classList.remove("hidden");
   qEl.setAttribute("aria-expanded", "true");
 }
 function choose(i) {
-  qEl.value = suggestions[i].question;
+  const question = suggestions[i].question;
   closeSuggestions();
-  clearThread();  // suggestions are standalone questions
-  document.getElementById("form").requestSubmit();
+  clearFollowUp();  // suggestions are standalone questions
+  ask(question);
 }
 qEl.addEventListener("input", () => {
   clearTimeout(suggestTimer);
@@ -346,7 +446,7 @@ qEl.addEventListener("input", () => {
   suggestTimer = setTimeout(async () => {
     const seq = ++suggestSeq;  // answers can arrive out of order; only the latest counts
     try {
-      const r = await api(`/api/suggest?q=${encodeURIComponent(text)}&limit=8`);
+      const r = await api(`/api/suggest?q=${encodeURIComponent(text)}&limit=6`);
       const body = await r.json();
       if (seq !== suggestSeq) return;
       suggestions = body.suggestions || []; picked = -1;
@@ -355,16 +455,18 @@ qEl.addEventListener("input", () => {
   }, 120);
 });
 qEl.addEventListener("keydown", (e) => {
-  if (suggestEl.classList.contains("hidden")) return;
-  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+  const open = !suggestEl.classList.contains("hidden");
+  if (open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
     e.preventDefault();
     const step = e.key === "ArrowDown" ? 1 : -1;
     picked = (picked + step + suggestions.length) % suggestions.length;
     drawSuggestions();
-  } else if (e.key === "Enter" && picked >= 0) {
+  } else if (open && e.key === "Enter" && picked >= 0) {
     e.preventDefault(); choose(picked);
   } else if (e.key === "Escape") {
-    closeSuggestions();
+    if (open) closeSuggestions(); else qEl.value = "";
+  } else if (e.key === "ArrowUp" && !qEl.value && lastQuestion) {
+    e.preventDefault(); qEl.value = lastQuestion;  // edit the last question
   }
 });
 // mousedown, not click: it fires before the input's blur closes the list.
@@ -373,6 +475,13 @@ suggestEl.addEventListener("mousedown", (e) => {
   if (li) { e.preventDefault(); choose(Number(li.dataset.i)); }
 });
 qEl.addEventListener("blur", () => setTimeout(closeSuggestions, 100));
+// "/" jumps to the question box from anywhere on the page.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && document.activeElement !== qEl && !e.ctrlKey && !e.metaKey
+      && !(document.activeElement && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName))) {
+    e.preventDefault(); qEl.focus();
+  }
+});
 
 // -------------------------------------------------------------------- CSV and clipboard
 // Excel needs the byte-order mark to read Arabic and Urdu as UTF-8. A cell that starts
@@ -386,7 +495,7 @@ function csvCell(v) {
 }
 function downloadCSV(result) {
   const lines = [result.columns, ...result.rows].map(r => r.map(csvCell).join(","));
-  const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = `answer-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
@@ -399,13 +508,19 @@ async function copyAnswer(d, button) {
   try {
     await navigator.clipboard.writeText((d.summary ? d.summary + "\n\n" : "") + table);
     button.textContent = "Copied";
-  } catch { button.textContent = "Copy failed"; }
+  } catch { button.textContent = "Couldn't copy"; }
   setTimeout(() => { button.textContent = "Copy"; }, 1500);
 }
+// The phone's share sheet (WhatsApp included) where the browser has one.
+async function shareAnswer(d) {
+  const text = `${d.question}\n${d.summary || ""}`.trim();
+  try { await navigator.share({ text }); } catch { /* cancelled */ }
+}
 
-// ------------------------------------------------------------------------ what can I ask
+// ------------------------------------------------------------------------ what's in the data
 // Tableau retired Ask Data partly because people had to know the field names to use it.
-// This lists what the database holds, with the Arabic and Urdu words the glossary knows.
+// This lists what the database holds (as the current role sees it), with the Arabic and
+// Urdu words the glossary knows.
 const helpEl = document.getElementById("help");
 document.getElementById("help-link").onclick = async () => {
   if (!helpEl.classList.contains("hidden")) { helpEl.classList.add("hidden"); return; }
@@ -414,12 +529,10 @@ document.getElementById("help-link").onclick = async () => {
     const cards = Object.entries(schema.tables).map(([name, t]) =>
       // First sentence only: the glossary's descriptions are written for the model and
       // carry column names after that ("unit_price_aed here is ...").
-      `<div><b>${esc(name.replace(/_/g, " "))}</b> ${esc((t.description || "").split(". ")[0])}`
-      + ` <span class="meta">· ${Number(t.row_count).toLocaleString("en")} rows</span>`
+      `<div><b>${esc(name.replace(/_/g, " "))}</b>${esc((t.description || "").split(". ")[0])}`
+      + ` · ${Number(t.row_count).toLocaleString("en")} rows`
       + `<div class="alias" dir="auto">${esc([...t.aliases_ar.slice(0, 2), ...t.aliases_ur.slice(0, 2)].join(" · "))}</div></div>`);
-    helpEl.innerHTML = `<h2>What you can ask about</h2><div class="topics">${cards.join("")}</div>`
-      + `<p class="meta" style="margin:.7rem 0 0">Start typing for suggestions. Questions can be in `
-      + `English, Arabic or Urdu; names and places can be written either way.</p>`;
+    helpEl.innerHTML = `<div class="topics">${cards.join("")}</div>`;
     helpEl.classList.remove("hidden");
   } catch { /* the panel is optional */ }
 };
@@ -429,22 +542,16 @@ document.getElementById("help-link").onclick = async () => {
 // from the cache and warns the next person. The page sends only the answer's id: the
 // server never accepts SQL from the browser.
 async function sendFeedback(d, verdict, box) {
-  box.textContent = "…";
+  box.textContent = "Saving";
   try {
     const r = await api("/api/feedback", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ answer_id: d.answer_id, verdict }),
     });
-    box.textContent = !r.ok ? "Couldn't save that, try asking again."
-      : verdict === "up" ? "Thanks: marked as a verified answer."
-      : "Thanks: reported. It won't be served from the cache again.";
+    box.textContent = !r.ok ? "Couldn't save that. Try asking again."
+      : verdict === "up" ? "Thanks. Marked as a verified answer."
+      : "Thanks. Reported, so it won't be served from the cache again.";
   } catch { box.textContent = "Couldn't save that."; }
-}
-
-// The phone's share sheet (WhatsApp included) where the browser has one.
-async function shareAnswer(d) {
-  const text = `${d.question}\n${d.summary || ""}`.trim();
-  try { await navigator.share({ text }); } catch { /* cancelled */ }
 }
 
 // ------------------------------------------------------------------------------- charts
@@ -466,7 +573,7 @@ function chartSVG(result, spec) {
         + `<rect class="bar-fill" x="${labelW}" y="${y + 4}" width="${w}" height="${row - 9}" rx="3"/>`
         + `<text class="muted" x="${labelW + w + 6}" y="${y + 16}">${esc(fmt(v))}</text>`;
     }).join("");
-    return `<svg class="chart" viewBox="0 0 660 ${h}" role="img" aria-label="${title}">${bars}</svg>`;
+    return `<svg class="plot" viewBox="0 0 660 ${h}" role="img" aria-label="${title}">${bars}</svg>`;
   }
   const W = 660, H = 230, left = 56, right = 16, top = 14, bottom = 34;
   const x = (i) => left + (i * (W - left - right)) / (pairs.length - 1);
@@ -475,245 +582,252 @@ function chartSVG(result, spec) {
   const every = Math.ceil(pairs.length / 8);
   const xLabels = pairs.map((p, i) => i % every ? "" :
     `<text class="muted" x="${x(i)}" y="${H - 12}" text-anchor="middle">${esc(short(p[0]))}</text>`).join("");
-  const dots = pairs.map((p, i) => `<circle class="dot" cx="${x(i)}" cy="${y(p[1])}" r="3">`
+  const dots = pairs.map((p, i) => `<circle class="dotp" cx="${x(i)}" cy="${y(p[1])}" r="3">`
     + `<title>${esc(p[0])}: ${esc(fmt(p[1]))}</title></circle>`).join("");
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${title}">`
+  return `<svg class="plot" viewBox="0 0 ${W} ${H}" role="img" aria-label="${title}">`
     + `<line class="axis" x1="${left}" y1="${y(0)}" x2="${W - right}" y2="${y(0)}"/>`
     + `<text class="muted" x="${left - 8}" y="${y(max) + 4}" text-anchor="end">${esc(fmt(max))}</text>`
     + `<text class="muted" x="${left - 8}" y="${y(0) + 4}" text-anchor="end">0</text>`
     + `<polyline class="line" points="${points}"/>${dots}${xLabels}</svg>`;
 }
 
-document.getElementById("form").onsubmit = (e) => {
+// --------------------------------------------------------------------------------- asking
+formEl.onsubmit = (e) => {
   e.preventDefault();
   closeSuggestions();
   const question = qEl.value.trim();
-  if (question) askQuestion(question, { follow_up_of: thread ? thread.id : undefined });
+  if (question) ask(question, { follow_up_of: followUp ? followUp.id : undefined });
 };
 
+function newTurn(question) {
+  emptyEl.classList.add("hidden");
+  const turn = document.createElement("article");
+  turn.className = "turn";
+  turn.innerHTML = `<p class="q" dir="auto">${esc(question)}</p><div class="body"></div>`;
+  threadEl.appendChild(turn);
+  while (threadEl.children.length > 20) threadEl.firstElementChild.remove();
+  const motion = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  turn.scrollIntoView({ behavior: motion, block: "start" });
+  return turn;
+}
+
 // `extra` carries follow_up_of and, after a clarifying question, the user's choice.
-async function askQuestion(question, extra = {}) {
-
+async function ask(question, extra = {}, turn = null) {
   goEl.disabled = true;
+  qEl.value = "";
+  lastQuestion = question;
+  turn = turn || newTurn(question);
+  const body = turn.querySelector(".body");
 
-  // A static "Generating…" is indistinguishable from a hang. A question usually takes
-  // seconds, but one asked during the startup warm-up waits for it (about 3 minutes on a
-  // CPU), and one queued behind an eval run waits longer, because Ollama serialises
-  // requests per model. Showing elapsed time is the difference between "working" and
-  // "broken" from the user's side.
+  // The question shows at once; the wait says what it is for. A question usually takes
+  // seconds on a CPU, one asked during the startup warm-up waits for it, and one queued
+  // behind an eval run waits longer. Elapsed time is the difference between "working" and
+  // "broken". No fake stage animation: the server answers in one request.
   const started = Date.now();
-  let tick = null;
   const paint = () => {
     const s = Math.round((Date.now() - started) / 1000);
-    let note = "";
+    let note = "The model writes the query (the slow part on a CPU); checking and running it take milliseconds.";
     if (s > 240) {
-      note = "<br>Much slower than usual — another process may be queued at the same "
-           + "model. Check with: <code>pgrep -fa 'mizan eval'</code>";
+      note = "Much slower than usual. Another process may be using the same model "
+        + "(check with <code>pgrep -fa 'mizan eval'</code>).";
     } else if (s > 30) {
-      note = "<br>The model is probably still reading its prompt (a one-off warm-up of "
-           + "about 3 minutes after the server starts). This is normal.";
+      note = "The model is probably still reading its instructions, a one-off warm-up of a few "
+        + "minutes after the server starts.";
     }
-    out.innerHTML = `<div class="card meta">Generating… <strong>${s}s</strong>${note}</div>`;
+    body.innerHTML = `<div class="pending"><span class="spinner" aria-hidden="true"></span>`
+      + `Writing the query <span>${s}s</span></div><p class="pending-note">${note}</p>`
+      + `<div class="skeleton"></div>`;
   };
   paint();
-  tick = setInterval(paint, 1000);
+  const tick = setInterval(paint, 1000);
 
   try {
     const res = await api("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, ...extra })
+      body: JSON.stringify({ question, ...extra }),
     });
     if (res.status === 401) {
-      out.innerHTML = `<div class="card"><h2>Sign-in needed</h2>
-        <p class="meta" style="margin:0">This server only answers signed-in requests. Pick a
-        role above and ask again.</p></div>`;
+      body.innerHTML = `<div class="refusal"><h2>Sign in to ask</h2>`
+        + `<p>This server only answers signed-in requests. Pick a role at the top and ask again.</p></div>`;
       return;
     }
     if (!res.ok) {
       const detail = await res.text();
-      out.innerHTML = `<div class="card"><h2>Service error</h2>
-        <div class="violation">HTTP ${res.status}</div><pre>${esc(detail)}</pre></div>`;
+      body.innerHTML = `<div class="unsure"><h2>The server couldn't answer</h2>`
+        + `<p>It returned an error (HTTP ${res.status}). Try again in a moment.</p>`
+        + `<details class="more"><summary>Details</summary><div class="panel"><pre>${esc(detail)}</pre></div></details></div>`;
       return;
     }
     const data = await res.json();
     if (data.clarify) {
-      renderClarify(data, question, extra);
+      renderClarify(turn, data, question, extra);
     } else {
-      render(data);
-      // Only a real answer starts (or continues) a thread.
-      if (data.ok && data.answer_id) {
-        thread = { id: data.answer_id, question: data.question };
-        qEl.value = "";  // ready for the follow-up; the question stays on screen in its card
+      render(turn, data);
+      if (data.ok && data.answer_id) {  // only a real answer can be followed up
+        followUp = { id: data.answer_id, question: data.question };
       }
-      drawThread();
+      drawFollowUp();
     }
     checkHealth();  // the cached-answer count may have changed
   } catch (err) {
-    out.innerHTML = `<div class="card"><h2>Network error</h2>
-      <div class="violation">${esc(err.message)}</div></div>`;
+    body.innerHTML = `<div class="unsure"><h2>Couldn't reach the server</h2>`
+      + `<p>${esc(err.message)}</p></div>`;
   } finally {
-    if (tick) clearInterval(tick);
+    clearInterval(tick);
     goEl.disabled = false;
+    qEl.focus();
   }
 }
 
-// A business term with two meanings: show the options in the question's language and ask
-// again with the choice. No model call happened, so this appears instantly.
-function renderClarify(d, question, extra) {
-  out.innerHTML = `<div class="card"><h2>Question · ${esc(LANGUAGE[d.script] || d.script)}</h2>
-    <div${d.rtl ? ' class="rtl"' : ""}>${esc(question)}</div></div>
-    <div class="card"><h2>Before I answer</h2>
-    <div class="answer" dir="auto" style="font-size:1.1rem">${esc(d.clarify.ask)}</div>
-    <div class="choices" dir="auto">${d.clarify.options.map((label, i) =>
-      `<button type="button" data-i="${i}">${esc(label)}</button>`).join("")}</div></div>`;
-  for (const b of out.querySelectorAll(".choices button")) {
-    b.onclick = () => askQuestion(question, {
+// A business term with two meanings: ask back in the question's language, then answer with
+// the choice. No model call happened, so this appears instantly.
+function renderClarify(turn, d, question, extra) {
+  const body = turn.querySelector(".body");
+  body.innerHTML = `<p class="answer" dir="auto" style="font-size:1.2rem">${esc(d.clarify.ask)}</p>`
+    + `<div class="choices" dir="auto">${d.clarify.options.map((label, i) =>
+      `<button type="button" data-i="${i}">${esc(label)}</button>`).join("")}</div>`;
+  for (const b of body.querySelectorAll(".choices button")) {
+    b.onclick = () => ask(question, {
       ...extra, clarification: { id: d.clarify.id, option: Number(b.dataset.i) },
-    });
+    }, turn);
   }
 }
 
-function render(d) {
+function chip(kind, icon, text) {
+  return `<span class="chip ${kind}">${ICON[icon] || ""}${esc(text)}</span>`;
+}
+
+function render(turn, d) {
+  const q = turn.querySelector(".q");
+  let context = "";
+  if (d.follow_up_of) context += `Following up on “${esc(d.follow_up_of)}”. `;
+  if (d.clarified_as) context += `Read as: ${esc(d.clarified_as)}`;
+  if (context) q.insertAdjacentHTML("afterend", `<p class="context">${context}</p>`);
+  const body = turn.querySelector(".body");
+  const violations = d.violations || [];
+  const denied = violations.filter(v => v.rule === "not_authorized");
+  const dangerous = violations.filter(v => DANGEROUS.includes(v.rule));
+  const reasons = (list) => `<ul class="reasons">${list.map(v =>
+    `<li>${esc(v.rule)}: ${esc(v.detail)}</li>`).join("")}</ul>`;
   let html = "";
 
-  html += `<div class="card"><h2>Question · ${esc(LANGUAGE[d.script] || d.script)}</h2>
-    <div${d.rtl ? ' class="rtl"' : ""}>${esc(d.question)}</div>`;
-  if (d.follow_up_of) {
-    html += `<div class="context">↳ follow-up to “${esc(d.follow_up_of)}”</div>`;
-  }
-  if (d.clarified_as) {
-    html += `<div class="context">Read as: ${esc(d.clarified_as)}</div>`;
-  }
-  html += `</div>`;
-
-  const denied = (d.violations || []).filter(v => v.rule === "not_authorized");
-  if (denied.length) {
-    // Not an attack, just outside this role: say so in words, not rule names.
-    const role = roleEl.options[roleEl.selectedIndex].text;
-    html += `<div class="card"><h2>Not allowed for your role</h2>
-      <div class="answer" dir="auto">Signed in as ${esc(role)}, you can't see that.</div>`;
-    for (const v of denied) html += `<div class="violation">${esc(v.detail)}</div>`;
-    html += `<p class="meta" style="margin-bottom:0">Checked before anything ran. Nothing
-      was read from the database.</p></div>`;
-  } else if (d.violations && d.violations.length) {
-    html += `<div class="card"><h2>Blocked by guardrails</h2>`;
-    for (const v of d.violations) {
-      html += `<div class="violation">${esc(v.rule)} — ${esc(v.detail)}</div>`;
+  if (dangerous.length) {
+    // The moment the guardrails exist for: calm, clear, and nothing ran.
+    const what = dangerous.some(v => ["write_operation", "dangerous_statement"].includes(v.rule))
+      ? "That would have changed or deleted data."
+      : dangerous.some(v => v.rule === "denied_function")
+        ? "That would have used a function this database doesn't allow, like reading files."
+        : "That query tried something this database doesn't allow.";
+    html += `<div class="blocked">${ICON.shield}<div><h2>Blocked before it reached the database</h2>`
+      + `<p>${what} Nothing ran, and your data is untouched.</p>`
+      + `<details class="more"><summary>What the model wrote</summary><div class="panel">`
+      + (d.sql ? `<pre>${esc(d.sql)}</pre>` : "") + reasons(dangerous) + `</div></details></div></div>`;
+  } else if (denied.length) {
+    // Not an attack, just outside this role: say so in words, technical reason folded away.
+    html += `<div class="refusal"><h2>You don't have access to that</h2>`
+      + `<p>Signed in as ${esc(roleName())}, that data isn't available to you. Nothing was read `
+      + `from the database. Ask an admin if you need it.</p>`
+      + `<details class="more"><summary>Why this was refused</summary><div class="panel">`
+      + reasons(denied) + `</div></details></div>`;
+  } else if (violations.length) {
+    html += `<div class="unsure"><h2>Couldn't answer that safely</h2>`
+      + `<p>The query didn't check out against the database, even after a second try. `
+      + `Try asking it another way.</p>`
+      + `<details class="more"><summary>What went wrong</summary><div class="panel">`
+      + (d.sql ? `<pre>${esc(d.sql)}</pre>` : "") + reasons(violations) + `</div></details></div>`;
+  } else if (d.summary) {
+    html += `<p class="answer" dir="auto">${esc(d.summary)}</p>`;
+    html += `<div class="chips">` + trustChips(d) + `</div>`;
+    if (d.result && d.chart) {
+      const svg = chartSVG(d.result, d.chart);
+      if (svg) html += `<div class="chart">${svg}</div>`;
     }
-    html += `<p class="meta" style="margin-bottom:0">The query was rejected before touching
-      the database. Nothing was executed.</p></div>`;
-  }
-
-  // The answer first, for someone who doesn't read SQL; how it was produced comes after.
-  if (d.summary) {
-    html += `<div class="card"><h2>Answer</h2>
-      <div class="answer" dir="auto">${esc(d.summary)}</div>`;
-    if (d.explanation) {
-      // The query in plain steps, so someone who doesn't read SQL can check what was counted.
-      html += `<div class="how" dir="auto">How: ${esc(d.explanation)}</div>`;
-    }
-    if (d.placeholders && d.placeholders.length) {
-      // The model wrote the SQL against placeholders; the values were bound at execution.
-      const list = d.placeholders.map(p =>
-        `<code>${esc(p.name)}</code>${p.column ? ` (${esc(p.column)})` : ""}`).join(", ");
-      html += `<div class="private">Private values were sent to the model only as `
-        + `placeholders: ${list}. The real values were filled in when the query ran.</div>`;
-    }
-    if (d.cache && d.cache.verified) {
-      html += `<span class="flag ok">✓ Verified: a person confirmed this answer.</span>`;
-    }
-    if (d.reported) {
-      html += `<span class="flag bad">⚠ Someone reported this answer as wrong. Check the steps above.</span>`;
-    }
+    html += `<div class="under">`;
+    if (d.result) html += tableDetails(d);
+    html += workingDetails(d);
     if (d.answer_id) {
-      html += `<div class="feedback" id="feedback">Right answer?
-        <button type="button" id="up" title="Yes, this is right">👍</button>
-        <button type="button" id="down" title="No, this is wrong">👎</button></div>`;
+      html += `<div class="feedback"><span>Right answer?</span>`
+        + `<button type="button" data-v="up" title="Yes, this is right" aria-label="Yes, this is right">👍</button>`
+        + `<button type="button" data-v="down" title="No, this is wrong" aria-label="No, this is wrong">👎</button></div>`;
     }
     html += `</div>`;
+  } else if (d.error) {
+    html += `<div class="unsure"><h2>Couldn't answer that</h2><p>${esc(d.error)}</p></div>`;
   }
+  body.innerHTML = html;
 
-  if (d.result && d.chart) {
-    const svg = chartSVG(d.result, d.chart);
-    if (svg) html += `<div class="card"><h2>Chart</h2>${svg}</div>`;
+  const box = body.querySelector(".feedback");
+  if (box) {
+    for (const b of box.querySelectorAll("button")) b.onclick = () => sendFeedback(d, b.dataset.v, box);
   }
-
-  if (d.result) {
-    const cols = d.result.columns, rows = d.result.rows;
-    html += `<div class="card"><h2>Result · ${rows.length} rows</h2>
-      <div class="actions"><button type="button" id="csv">Download CSV</button>
-      <button type="button" id="copy">Copy</button>
-      ${navigator.share ? '<button type="button" id="share">Share</button>' : ""}</div>
-      <div class="scroll"><table><thead><tr>`;
-    for (const c of cols) html += `<th>${esc(c)}</th>`;
-    html += `</tr></thead><tbody>`;
-    for (const r of rows.slice(0, 50)) {
-      html += "<tr>" + r.map(v => `<td dir="auto">${esc(v === null ? "∅" : v)}</td>`).join("") + "</tr>";
-    }
-    html += `</tbody></table></div>`;
-    if (rows.length > 50) {
-      html += `<p class="meta" style="margin-bottom:0">Showing 50 of ${rows.length} rows; the CSV has all of them.</p>`;
-    }
-    if (d.result.truncated) html += `<p class="note" style="margin-bottom:0">Truncated.</p>`;
-    html += `</div>`;
-  }
-
-  // The evidence, one click away: open by default only when there is no answer to show.
-  html += `<details class="tech"${d.summary ? "" : " open"}><summary>Details: the SQL, `
-    + `the checks it passed and the confidence</summary>`;
-  if (d.sql) {
-    html += `<div class="card"><h2>Generated SQL</h2><pre>${esc(d.sql)}</pre></div>`;
-  }
-
-  if (d.warnings && d.warnings.length) {
-    html += `<div class="card"><h2>Notes</h2>`;
-    for (const w of d.warnings) html += `<div class="note">${esc(w)}</div>`;
-    html += `</div>`;
-  }
-
-  if (d.error && !(d.violations || []).length) {
-    html += `<div class="card"><h2>Error</h2><div class="violation">${esc(d.error)}</div></div>`;
-  }
-
-  const c = d.confidence || {};
-  // `band` is interpolated into a class attribute, not into text, so esc() is the wrong
-  // tool — attribute context needs an allowlist, not entity encoding. The value is
-  // server-controlled today; pinning it to the three known bands means a future change
-  // that makes it data-derived cannot turn into attribute injection.
-  const BANDS = ["high", "medium", "low"];
-  const band = BANDS.includes(c.band) ? c.band : "low";
-  const pct = Math.round((c.score || 0) * 100);
-  html += `<div class="card"><h2>Confidence</h2>
-    <span class="badge ${band}">${pct}% · ${esc(band)}</span>
-    <div class="bar"><div style="width:${pct}%"></div></div>`;
-  for (const s of (c.signals || [])) {
-    html += `<div class="meta" style="margin-top:.4rem">
-      <strong>${esc(s.name)}</strong> ${Math.round(s.value * 100)}% — ${esc(s.detail)}</div>`;
-  }
-  html += `<p class="meta" style="margin:.7rem 0 0">A heuristic ranking signal, not a
-    calibrated probability.</p></div>`;
-
-  const repaired = d.repairs ? ` · repaired ${Number(d.repairs)}×` : "";
-  const cached = d.cache && d.cache.hit
-    ? ` · <strong>from cache</strong> (same question as “${esc(d.cache.matched)}”; `
-      + `SQL validated and run again)`
-    : "";
-  html += `<p class="meta">${esc(d.provider)}/${esc(d.model)} · ${d.latency_ms} ms`
-    + `${repaired}${cached}</p></details>`;
-  out.innerHTML = html;
-  if (d.answer_id) {
-    const box = document.getElementById("feedback");
-    document.getElementById("up").onclick = () => sendFeedback(d, "up", box);
-    document.getElementById("down").onclick = () => sendFeedback(d, "down", box);
-  }
-  const share = document.getElementById("share");
+  const csv = body.querySelector("[data-act=csv]");
+  if (csv) csv.onclick = () => downloadCSV(d.result);
+  const copy = body.querySelector("[data-act=copy]");
+  if (copy) copy.onclick = () => copyAnswer(d, copy);
+  const share = body.querySelector("[data-act=share]");
   if (share) share.onclick = () => shareAnswer(d);
-  if (d.result) {
-    document.getElementById("csv").onclick = () => downloadCSV(d.result);
-    const copy = document.getElementById("copy");
-    copy.onclick = () => copyAnswer(d, copy);
+}
+
+// Small proofs under every answer: what was checked, what the model didn't see, whose rows.
+function trustChips(d) {
+  let chips = chip("ok", "check", "Checked before running");
+  const hidden = (d.placeholders || []).length;
+  if (hidden) {
+    chips += chip("ok", "lock", `${hidden} private ${hidden === 1 ? "value" : "values"} hidden from the AI`);
   }
+  if (authRequired && role().chip) chips += chip("", "filter", role().chip);
+  if (d.cache && d.cache.hit) chips += chip("", "bolt", "Instant, from the cache");
+  if (d.cache && d.cache.verified) chips += chip("ok", "check", "Verified by a person");
+  if (d.reported) chips += chip("warn", "alert", "Someone reported this answer as wrong");
+  const c = d.confidence || {};
+  if (c.band === "low") {
+    const weakest = (c.signals || []).slice().sort((a, b) => a.value - b.value)[0];
+    chips += chip("warn", "alert", weakest ? `Check this: ${weakest.detail}` : "Check this answer");
+  }
+  return chips;
+}
+
+function tableDetails(d) {
+  const cols = d.result.columns, rows = d.result.rows;
+  let html = `<details class="more"><summary>Show table · ${rows.length} ${rows.length === 1 ? "row" : "rows"}</summary>`
+    + `<div class="panel"><div class="row-actions"><button type="button" data-act="csv">Download CSV</button>`
+    + `<button type="button" data-act="copy">Copy</button>`
+    + (navigator.share ? `<button type="button" data-act="share">Share</button>` : "") + `</div>`
+    + `<div class="scroll"><table><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>`;
+  for (const r of rows.slice(0, 50)) {
+    html += "<tr>" + r.map(v => `<td dir="auto">${esc(v === null ? "∅" : v)}</td>`).join("") + "</tr>";
+  }
+  html += `</tbody></table></div>`;
+  if (rows.length > 50) html += `<p class="small">Showing 50 of ${rows.length} rows; the CSV has all of them.</p>`;
+  if (d.result.truncated) html += `<p class="small">The result was cut at the row limit.</p>`;
+  return html + `</div></details>`;
+}
+
+function workingDetails(d) {
+  let html = `<details class="more"><summary>How this was worked out</summary><div class="panel">`;
+  if (d.explanation) html += `<p class="step-list" dir="auto">${esc(d.explanation)}</p>`;
+  if (d.sql) html += `<pre>${esc(d.sql)}</pre>`;
+  if ((d.placeholders || []).length) {
+    const list = d.placeholders.map(p => `${esc(p.name)}${p.column ? ` (${esc(p.column)})` : ""}`).join(", ");
+    html += `<p class="small" style="margin-top:.7rem">The model saw ${list}, not the real values. `
+      + `They were filled in when the query ran.</p>`;
+  }
+  for (const w of (d.warnings || [])) html += `<p class="small">${esc(w)}</p>`;
+  const c = d.confidence || {};
+  if (c.signals && c.signals.length) {
+    html += `<p class="small" style="margin-top:.7rem">Confidence ${Math.round((c.score || 0) * 100)}% `
+      + `(${esc(c.band || "low")}), a ranking signal rather than a probability:</p>`;
+    for (const s of c.signals) {
+      html += `<p class="small">${esc(s.name.replace(/_/g, " "))}: ${Math.round(s.value * 100)}%, ${esc(s.detail)}</p>`;
+    }
+  }
+  const repaired = d.repairs ? ` · fixed its own query ${Number(d.repairs)}×` : "";
+  const cached = d.cache && d.cache.hit
+    ? ` · from the cache (same question as “${esc(d.cache.matched)}”, checked and run again)` : "";
+  html += `<p class="small" style="margin-top:.7rem">${esc(d.provider)}/${esc(d.model)} · `
+    + `${Number(d.latency_ms).toLocaleString("en")} ms${repaired}${cached}</p>`;
+  return html + `</div></details>`;
 }
 </script>
 </body>
