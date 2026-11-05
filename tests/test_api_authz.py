@@ -255,3 +255,31 @@ class TestSeparation:
 
         assert IN_DUBAI in offered("admin")
         assert IN_DUBAI not in offered("courier_ops")
+
+
+class TestWhatThePageNeeds:
+    def test_health_says_a_token_is_needed(
+        self, server: tuple[TestClient, MockProvider, Path]
+    ) -> None:
+        client, _, _ = server
+        assert client.get("/api/health").json()["auth"] is True
+
+    def test_health_says_no_token_is_needed_without_a_roles_file(self, db_path: Path) -> None:
+        settings = Settings.from_env(provider="mock", db_path=db_path)
+        with TestClient(create_app(settings, CacheSettings(enabled=False))) as client:
+            assert client.get("/api/health").json()["auth"] is False
+
+    def test_the_web_page_has_a_token_for_every_demo_role(self) -> None:
+        # The picker's tokens must be the ones the committed roles file hashes.
+        import hashlib
+        import re
+
+        page = (Path(__file__).resolve().parent.parent / "web" / "index.html").read_text("utf-8")
+        tokens = re.findall(r'token: "([^"]+)"', page)
+        committed = json.loads(
+            (
+                Path(__file__).resolve().parent.parent / "data" / "gulf_logistics.roles.json"
+            ).read_text("utf-8")
+        )["tokens"]
+        assert sorted(tokens) == sorted(TOKENS.values())
+        assert {hashlib.sha256(t.encode()).hexdigest() for t in tokens} == set(committed)

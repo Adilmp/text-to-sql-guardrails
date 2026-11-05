@@ -28,6 +28,13 @@
   h1 { margin: 0 0 .25rem; font-size: 1.6rem; letter-spacing: -.01em; }
   h1 span { color: var(--accent); font-weight: 500; }
   .sub { color: var(--muted); font-size: .9rem; margin: 0; }
+  .who { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .8rem;
+    font-size: .88rem; color: var(--muted); }
+  .who select { font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px; padding: .25rem .45rem; }
+  .who .role-note { color: var(--ink); }
+  .private { color: var(--muted); font-size: .85rem; margin-top: .45rem; }
+  .private code { font-family: var(--mono); font-size: .82rem; }
   form { display: flex; gap: .5rem; margin-bottom: 1rem; }
   input[type=text] {
     flex: 1; padding: .7rem .85rem; font-size: 1rem; font-family: inherit;
@@ -74,7 +81,9 @@
   .meta { color: var(--muted); font-size: .8rem; }
   .bar { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: .5rem; }
   .bar > div { height: 100%; background: var(--accent); }
-  .hidden { display: none; }
+  /* !important: components declared later (.thread, .who) set display: flex, which would
+     otherwise win over this same-specificity rule and keep a "hidden" element on screen. */
+  .hidden { display: none !important; }
   /* The mock provider returns canned SQL from a fixture table. Without a visible marker
      its output is indistinguishable from a real model's, which is genuinely misleading —
      it is the exact confusion that prompted adding this. */
@@ -150,6 +159,16 @@
     <p class="sub">Ask in English, Arabic or Urdu. Every query is validated against the
       real schema before it is allowed to run.</p>
     <div id="banner" class="banner hidden"></div>
+    <div class="who hidden" id="who">
+      <label for="role">Signed in as</label>
+      <select id="role">
+        <option value="admin">Admin</option>
+        <option value="courier_ops">Courier operations</option>
+        <option value="ksa_manager">Saudi Arabia manager</option>
+        <option value="analyst">Analyst</option>
+      </select>
+      <span class="role-note" id="role-note"></span>
+    </div>
   </header>
 
   <form id="form">
@@ -186,12 +205,42 @@ const out = document.getElementById("out");
 const qEl = document.getElementById("q");
 const goEl = document.getElementById("go");
 
+// ------------------------------------------------------------------------- demo sign-in
+// With a roles file next to the database the server answers only requests that carry a
+// bearer token, and the token's role decides what the answer can contain. These four are
+// public demo tokens: data/gulf_logistics.roles.json stores only their SHA-256. A real
+// deployment issues its own tokens and never ships them in a page.
+const DEMO_ROLES = {
+  admin: { token: "demo-admin", note: "sees everything." },
+  courier_ops: { token: "demo-courier-ops", note: "orders, couriers and warehouses only." },
+  ksa_manager: { token: "demo-ksa", note: "only Saudi Arabia's orders and customers." },
+  analyst: { token: "demo-analyst", note: "everything except who each customer is." },
+};
+const whoEl = document.getElementById("who");
+const roleEl = document.getElementById("role");
+const roleNoteEl = document.getElementById("role-note");
+try {
+  const saved = localStorage.getItem("mizan-role");
+  if (saved && DEMO_ROLES[saved]) roleEl.value = saved;
+} catch { /* storage can be unavailable; the default role is fine */ }
+function showRole() { roleNoteEl.textContent = DEMO_ROLES[roleEl.value].note; }
+showRole();
+
+// Every request goes through here, so none can forget the token. A server without a roles
+// file ignores it.
+function api(path, init = {}) {
+  const headers = new Headers(init.headers || {});
+  headers.set("Authorization", `Bearer ${DEMO_ROLES[roleEl.value].token}`);
+  return fetch(path, { ...init, headers });
+}
+
 // Announce which backend is serving, and whether it is ready. On the mock provider the SQL
 // comes from a fixture table, not from a model, and saying so up front is the difference
 // between a demo and a magic trick. On a live model the server reads its prompt once at
 // startup (minutes on a CPU); saying "warming up" beats a counter that looks like a hang.
 const banner = document.getElementById("banner");
 function showHealth(h) {
+  whoEl.classList.toggle("hidden", !h.auth);
   banner.classList.remove("hidden");
   if (h.provider === "mock") {
     banner.textContent = "Mock backend — SQL comes from a fixture table, not a model. "
@@ -253,6 +302,16 @@ function drawThread() {
 }
 function clearThread() { thread = null; drawThread(); }
 
+// Switching role starts over: the server won't continue another requester's conversation,
+// and an answer on screen was filtered for the previous role.
+roleEl.onchange = () => {
+  try { localStorage.setItem("mizan-role", roleEl.value); } catch { /* optional */ }
+  showRole();
+  clearThread();
+  out.innerHTML = "";
+  helpEl.classList.add("hidden");
+};
+
 // ---------------------------------------------------------------- suggestions as you type
 // The list comes from /api/suggest: curated questions only (never other users' questions),
 // cached ones first and marked "instant", because picking one answers in milliseconds.
@@ -287,7 +346,7 @@ qEl.addEventListener("input", () => {
   suggestTimer = setTimeout(async () => {
     const seq = ++suggestSeq;  // answers can arrive out of order; only the latest counts
     try {
-      const r = await fetch(`/api/suggest?q=${encodeURIComponent(text)}&limit=8`);
+      const r = await api(`/api/suggest?q=${encodeURIComponent(text)}&limit=8`);
       const body = await r.json();
       if (seq !== suggestSeq) return;
       suggestions = body.suggestions || []; picked = -1;
@@ -351,7 +410,7 @@ const helpEl = document.getElementById("help");
 document.getElementById("help-link").onclick = async () => {
   if (!helpEl.classList.contains("hidden")) { helpEl.classList.add("hidden"); return; }
   try {
-    const schema = await fetch("/api/schema").then(r => r.json());
+    const schema = await api("/api/schema").then(r => r.json());
     const cards = Object.entries(schema.tables).map(([name, t]) =>
       // First sentence only: the glossary's descriptions are written for the model and
       // carry column names after that ("unit_price_aed here is ...").
@@ -372,7 +431,7 @@ document.getElementById("help-link").onclick = async () => {
 async function sendFeedback(d, verdict, box) {
   box.textContent = "…";
   try {
-    const r = await fetch("/api/feedback", {
+    const r = await api("/api/feedback", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ answer_id: d.answer_id, verdict }),
     });
@@ -460,11 +519,17 @@ async function askQuestion(question, extra = {}) {
   tick = setInterval(paint, 1000);
 
   try {
-    const res = await fetch("/api/ask", {
+    const res = await api("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question, ...extra })
     });
+    if (res.status === 401) {
+      out.innerHTML = `<div class="card"><h2>Sign-in needed</h2>
+        <p class="meta" style="margin:0">This server only answers signed-in requests. Pick a
+        role above and ask again.</p></div>`;
+      return;
+    }
     if (!res.ok) {
       const detail = await res.text();
       out.innerHTML = `<div class="card"><h2>Service error</h2>
@@ -522,7 +587,16 @@ function render(d) {
   }
   html += `</div>`;
 
-  if (d.violations && d.violations.length) {
+  const denied = (d.violations || []).filter(v => v.rule === "not_authorized");
+  if (denied.length) {
+    // Not an attack, just outside this role: say so in words, not rule names.
+    const role = roleEl.options[roleEl.selectedIndex].text;
+    html += `<div class="card"><h2>Not allowed for your role</h2>
+      <div class="answer" dir="auto">Signed in as ${esc(role)}, you can't see that.</div>`;
+    for (const v of denied) html += `<div class="violation">${esc(v.detail)}</div>`;
+    html += `<p class="meta" style="margin-bottom:0">Checked before anything ran. Nothing
+      was read from the database.</p></div>`;
+  } else if (d.violations && d.violations.length) {
     html += `<div class="card"><h2>Blocked by guardrails</h2>`;
     for (const v of d.violations) {
       html += `<div class="violation">${esc(v.rule)} — ${esc(v.detail)}</div>`;
@@ -538,6 +612,13 @@ function render(d) {
     if (d.explanation) {
       // The query in plain steps, so someone who doesn't read SQL can check what was counted.
       html += `<div class="how" dir="auto">How: ${esc(d.explanation)}</div>`;
+    }
+    if (d.placeholders && d.placeholders.length) {
+      // The model wrote the SQL against placeholders; the values were bound at execution.
+      const list = d.placeholders.map(p =>
+        `<code>${esc(p.name)}</code>${p.column ? ` (${esc(p.column)})` : ""}`).join(", ");
+      html += `<div class="private">Private values were sent to the model only as `
+        + `placeholders: ${list}. The real values were filled in when the query ran.</div>`;
     }
     if (d.cache && d.cache.verified) {
       html += `<span class="flag ok">✓ Verified: a person confirmed this answer.</span>`;

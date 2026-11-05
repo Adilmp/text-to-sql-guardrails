@@ -427,3 +427,24 @@ class TestMaskedApi:
         last = json.loads((tmp / "logs" / "feedback.jsonl").read_text("utf-8").splitlines()[-1])
         assert last["question"] == "how many orders did :customer_name_1 place?"
         assert "Tariq" not in json.dumps(last, ensure_ascii=False)
+
+
+def test_the_response_lists_placeholders_without_values(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    import shutil
+
+    db = tmp_path / "shop.sqlite"
+    shutil.copy(db_path, db)
+    (tmp_path / "shop.privacy.json").write_text(
+        json.dumps({"sensitive_columns": SENSITIVE}), encoding="utf-8"
+    )
+    monkeypatch.setattr("mizan.api.build_provider", lambda _cfg: MockProvider(script=[BY_NAME]))
+    settings = Settings.from_env(provider="mock", db_path=db, log_dir=tmp_path / "logs")
+    with TestClient(create_app(settings, CacheSettings(path=tmp_path / "c.sqlite"))) as client:
+        body = client.post(
+            "/api/ask", json={"question": "how many orders did Tariq Al Thani place?"}
+        ).json()
+    assert body["placeholders"] == [{"name": ":customer_name_1", "column": "customers.name_en"}]
+    assert "Tariq" not in json.dumps(body["placeholders"])
