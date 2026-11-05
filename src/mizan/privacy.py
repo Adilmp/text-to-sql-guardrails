@@ -92,6 +92,23 @@ class Masked:
     bindings: dict[str, Binding] = field(default_factory=dict)
 
 
+def has_typed_placeholder(text: str) -> bool:
+    """Whether ``text`` contains placeholder-looking text the user typed (``:name``).
+
+    The masker never binds those, but a shared cache keyed by masked questions must not let
+    them reach another person's entry, so the cache steps aside for such a question.
+    """
+    return _TYPED_PLACEHOLDER_RE.search(text) is not None
+
+
+def load_masker(db_path: Path) -> Masker | None:
+    """The masker for ``db_path`` from ``<db>.privacy.json`` beside it, or ``None`` if absent."""
+    config = db_path.with_suffix(".privacy.json")
+    if not config.exists():
+        return None
+    return Masker.from_db(db_path, load_privacy_config(config))
+
+
 def load_privacy_config(path: Path) -> dict[str, str]:
     """Read ``<db>.privacy.json``: ``{"table.column": "placeholder prefix"}``."""
     data = json.loads(path.read_text(encoding="utf-8"))

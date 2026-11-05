@@ -39,6 +39,15 @@ Entries are keyed by a *context*: a hash of the system prompt (which contains th
 value lists and row counts), the backend and the model. Change any of them and earlier
 entries simply stop matching. Nothing has to remember to clear the cache.
 
+Private values
+--------------
+With a masker (privacy.py) the key is the **masked** question: "orders of Tariq Al Thani" and
+"orders of Omar Al Thani" are both "orders of :customer_name_1", share one entry, and each
+hit binds that request's own value. The stored question and SQL hold placeholders only, so
+the cache file contains no names. A question in which the user typed placeholder-looking text
+(``:customer_name_1``) skips the cache entirely: it would otherwise read, evict or overwrite
+an entry made for someone else's real question.
+
 Settings live here, not in ``config.py``: ``config.py`` holds what can change an answer, and
 that boundary is what the behaviour fingerprint draws (D28). A cache changes how fast an
 answer arrives, not what it is.
@@ -63,6 +72,7 @@ from .generate.pipeline import Answer, TextToSQL
 from .guardrails import execute, validate
 from .logging import get_logger
 from .nl import clean_for_model, detect_script, normalize_for_matching
+from .privacy import Binding, has_typed_placeholder
 from .validate.confidence import HIGH_THRESHOLD, score_answer
 
 logger = get_logger("cache")
@@ -320,19 +330,31 @@ class CachedTextToSQL:
         it, so its answer is never stored. It is still served from the cache when its words
         are exactly a known standalone question ("how many products are there?").
         """
-        key = canonical_question(question)
+        stored, key, bindings = self._key(question)
         if self.cache is None or not key:
             return self.engine.ask(question, context), None
-        if (served := self._from_cache(question, key)) is not None:
+        if (served := self._from_cache(question, key, bindings)) is not None:
             return served
         answer = self.engine.ask(question, context)
         if context:
             return answer, None
         if answer.sql is not None and cacheable(answer, self.settings.min_confidence):
-            self.cache.put(self.context, key, question, answer.sql, answer.confidence.score)
+            self.cache.put(self.context, key, stored, answer.sql, answer.confidence.score)
         return answer, None
 
-    def _from_cache(self, question: str, key: str) -> tuple[Answer, CacheHit] | None:
+    def _key(self, question: str) -> tuple[str, str, dict[str, Binding]]:
+        """``(question as stored, cache key, bindings)``. The key is empty when the cache must
+        not be used for this question (see "Private values" above)."""
+        if has_typed_placeholder(clean_for_model(question)):
+            return question, "", {}
+        masked = self.engine.mask_question(question)
+        if not masked.bindings:
+            return question, canonical_question(question), {}
+        return masked.text, canonical_question(masked.text), masked.bindings
+
+    def _from_cache(
+        self, question: str, key: str, bindings: dict[str, Binding]
+    ) -> tuple[Answer, CacheHit] | None:
         if self.cache is None:  # pragma: no cover - guarded by the caller
             return None
         started = time.perf_counter()
@@ -342,7 +364,7 @@ class CachedTextToSQL:
         cached_question, sql, hits, created_at, status = entry
 
         # Validated again, exactly like a fresh model answer: the cache file is untrusted.
-        report = validate(sql, self.engine.catalog, self.engine.policy)
+        report = validate(sql, self.engine.catalog, self.engine.policy, placeholders=bindings)
         if not report.ok:
             logger.warning(
                 "cached query failed validation; evicted",
@@ -356,6 +378,7 @@ class CachedTextToSQL:
                 self.engine.settings.db_path,
                 max_rows=self.engine.settings.max_rows,
                 timeout_s=self.engine.settings.query_timeout_s,
+                params={name: b.value for name, b in bindings.items()},
             )
         except MizanError as exc:
             logger.warning("cached query failed to run; evicted", extra={"error": str(exc)})
@@ -380,6 +403,7 @@ class CachedTextToSQL:
             provider=self.engine.provider.name,
             model=self.engine.provider.model,
             latency_ms=(time.perf_counter() - started) * 1000,
+            bindings=bindings,
         )
         logger.info("answered from cache", extra={"hits": hits})
         return answer, CacheHit(cached_question, hits, created_at, verified=status == VERIFIED)
@@ -388,13 +412,13 @@ class CachedTextToSQL:
         """A person said this answer is right (``up``) or wrong."""
         if self.cache is None:
             return
-        key = canonical_question(question)
+        stored, key, _ = self._key(question)
         if key:
-            self.cache.mark(self.context, key, question, sql, VERIFIED if up else REPORTED)
+            self.cache.mark(self.context, key, stored, sql, VERIFIED if up else REPORTED)
 
     def reported(self, question: str, sql: str) -> bool:
         """Whether a person reported exactly this query as the wrong answer to ``question``."""
-        if self.cache is None or not (key := canonical_question(question)):
+        if self.cache is None or not (key := self._key(question)[1]):
             return False
         entry = self.cache.status(self.context, key)
         return entry is not None and entry[0] == sql and entry[1] == REPORTED
