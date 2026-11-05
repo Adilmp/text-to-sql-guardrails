@@ -234,3 +234,15 @@ class TestPlaceholderSpoofing:
         issued = {f":{name}" for name in masked.bindings}
         assert issued and not issued & typed
         assert all(PLACEHOLDER_RE.fullmatch(p) for p in issued)
+
+
+class TestKnownBindings:
+    """Follow-ups: placeholders from earlier in the conversation keep their names."""
+
+    def test_a_known_value_keeps_its_name_and_a_new_one_is_numbered_after_it(
+        self, masker: Masker
+    ) -> None:
+        known = {"customer_name_1": Binding("Tariq Al Thani", "customers", "name_en")}
+        masked = masker.mask("Tariq Al Thani and Omar Al Thani", known=known)
+        assert masked.text == ":customer_name_1 and :customer_name_2"
+        assert masked.bindings["customer_name_2"].value == "Omar Al Thani"
