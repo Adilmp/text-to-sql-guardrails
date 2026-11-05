@@ -38,6 +38,14 @@ the validator accepts only the placeholders that were issued, and the executor b
 real values as SQLite parameters. ``Answer.sql`` keeps the placeholders; ``Answer.bindings``
 holds the values, server side (DECISIONS.md D44).
 
+Authorization
+-------------
+With a ``role`` (authz.py) the model is shown only the role's slice of the schema, the
+validator rejects anything outside it (``not_authorized``, never repaired), the role's row
+filters are applied to the validated query with the requester's ``attrs`` bound as
+``:_user_*`` parameters, and the SQLite connection refuses any read outside the role.
+``Answer.sql`` is the query as validated, without the filters wrapped around it.
+
 Self-consistency
 ----------------
 When ``self_consistency_n > 1`` the model is sampled several times and the candidates are
@@ -55,6 +63,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..authz import Principal, RolePolicy, apply_row_filters
 from ..config import Settings
 from ..errors import ExecutionError, MizanError, ProviderError
 from ..guardrails import (
@@ -178,9 +187,11 @@ class TextToSQL:
         settings: Settings,
         policy: GuardrailPolicy | None = None,
         masker: Masker | None = None,
+        role: RolePolicy | None = None,
     ) -> None:
         self.catalog = catalog
         self.masker = masker
+        self.role = role
         self.provider = provider
         self.settings = settings
         self.policy = policy or GuardrailPolicy(
@@ -188,7 +199,7 @@ class TextToSQL:
         )
         # Built once: it is identical for every question (prompt.py), which is what lets
         # the backend's prompt cache serve every request after the first.
-        self.system_prompt = build_system_prompt(catalog)
+        self.system_prompt = build_system_prompt(catalog.restricted(role) if role else catalog)
 
     def warm_up(self) -> float | None:
         """Make the backend read the system prompt now, so the first user doesn't wait.
@@ -214,12 +225,19 @@ class TextToSQL:
         logger.info("warm-up done", extra={"elapsed_ms": round(elapsed)})
         return elapsed
 
-    def ask(self, question: str, context: Sequence[tuple[str, str]] = ()) -> Answer:
+    def ask(
+        self,
+        question: str,
+        context: Sequence[tuple[str, str]] = (),
+        attrs: Mapping[str, str] | None = None,
+    ) -> Answer:
         """Answer one natural-language question.
 
         ``context`` holds earlier exchanges of the same conversation, oldest first, as
         ``(question, the SQL that answered it)``. Empty for a standalone question.
+        ``attrs`` are the requester's attributes, for the role's row filters.
         """
+        attrs = attrs or {}
         started = time.perf_counter()
         script = detect_script(question)
         cleaned = clean_for_model(question)
@@ -249,7 +267,7 @@ class TextToSQL:
         )
 
         try:
-            candidates = self._sample(system, user, prior, bindings)
+            candidates = self._sample(system, user, prior, bindings, attrs)
         except ProviderError as exc:
             return self._failed(question, cleaned, script, started, str(exc), code=exc.code)
 
@@ -259,7 +277,7 @@ class TextToSQL:
         chosen, agreement = self._choose(candidates)
         rules_seen = [rule for c in candidates for rule in c.guardrail.rules_fired]
         try:
-            chosen, attempts = self._repair(system, user, chosen, prior, bindings)
+            chosen, attempts = self._repair(system, user, chosen, prior, bindings, attrs)
         except ProviderError as exc:
             # The model server failed mid-repair. The first answer still stands; report it
             # rather than throwing away a query that was (at worst) imperfect.
@@ -333,23 +351,49 @@ class TextToSQL:
         masked = self.masker.mask(text, known=known)
         return masked.text, masked.bindings
 
-    def _evaluate(self, raw_text: str, bindings: Mapping[str, Binding]) -> Candidate:
+    def run_query(
+        self,
+        sql: str,
+        bindings: Mapping[str, Binding],
+        attrs: Mapping[str, str] | None = None,
+    ) -> QueryResult:
+        """Run validated ``sql``: row filters applied, values bound, reads limited to the role.
+
+        The one way this engine executes a query, for fresh answers and cached ones alike, so
+        no path can skip a layer.
+        """
+        params = {name: b.value for name, b in bindings.items()}
+        if self.role is not None:
+            principal = Principal(self.role, attrs or {})
+            sql, filter_params = apply_row_filters(sql, principal, self.catalog)
+            params.update(filter_params)
+        return execute(
+            sql,
+            self.settings.db_path,
+            max_rows=self.settings.max_rows,
+            timeout_s=self.settings.query_timeout_s,
+            params=params,
+            role=self.role,
+        )
+
+    def _evaluate(
+        self, raw_text: str, bindings: Mapping[str, Binding], attrs: Mapping[str, str]
+    ) -> Candidate:
         """Extract, validate, execute and ground one model reply."""
         sql = extract_sql(raw_text)
         report = validate(
-            sql, self.catalog, self.policy, raw_output=raw_text, placeholders=bindings.keys()
+            sql,
+            self.catalog,
+            self.policy,
+            raw_output=raw_text,
+            placeholders=bindings.keys(),
+            role=self.role,
         )
         candidate = Candidate(raw_text=raw_text, sql=sql, guardrail=report)
         if not report.ok:
             return candidate
         try:
-            candidate.result = execute(
-                report.sql,
-                self.settings.db_path,
-                max_rows=self.settings.max_rows,
-                timeout_s=self.settings.query_timeout_s,
-                params={name: b.value for name, b in bindings.items()},
-            )
+            candidate.result = self.run_query(report.sql, bindings, attrs)
         except (ExecutionError, MizanError) as exc:
             candidate.error = str(exc)
             logger.info("candidate failed to execute", extra={"error": str(exc)})
@@ -360,6 +404,7 @@ class TextToSQL:
             self.settings.db_path,
             bindings=bindings,
             sensitive=self.masker.sensitive_columns if self.masker else (),
+            role=self.role,
         )
         return candidate
 
@@ -369,6 +414,7 @@ class TextToSQL:
         user: str,
         prior: Sequence[Turn] = (),
         bindings: Mapping[str, Binding] | None = None,
+        attrs: Mapping[str, str] | None = None,
     ) -> list[Candidate]:
         """Generate, extract, validate and execute each sample."""
         candidates: list[Candidate] = []
@@ -386,7 +432,7 @@ class TextToSQL:
                 temperature=temperature,
                 max_tokens=self.settings.max_output_tokens,
             )
-            candidates.append(self._evaluate(completion.text, bindings or {}))
+            candidates.append(self._evaluate(completion.text, bindings or {}, attrs or {}))
         return candidates
 
     def _repair(
@@ -396,6 +442,7 @@ class TextToSQL:
         chosen: Candidate,
         prior: Sequence[Turn] = (),
         bindings: Mapping[str, Binding] | None = None,
+        attrs: Mapping[str, str] | None = None,
     ) -> tuple[Candidate, list[Candidate]]:
         """Show the model what is wrong with its query, up to ``max_repairs`` times.
 
@@ -421,7 +468,7 @@ class TextToSQL:
                 temperature=self.settings.temperature,
                 max_tokens=self.settings.max_output_tokens,
             )
-            current = self._evaluate(completion.text, bindings or {})
+            current = self._evaluate(completion.text, bindings or {}, attrs or {})
             attempts.append(current)
             history += [("user", problem.feedback), ("assistant", completion.text)]
             if current.rank >= best.rank:

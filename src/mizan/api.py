@@ -13,6 +13,14 @@ analysis whose answer is "this was not safe to run". The client needs the violat
 display it, and burying that in an error status pushes callers toward ``try/except`` around
 what is a normal, expected outcome. Genuine failures — a dead backend, a malformed request —
 still return real error codes.
+
+**Who is asking comes from a bearer token, and only from it.** With ``<db>.roles.json``
+beside the database, every data endpoint needs ``Authorization: Bearer <token>`` (401
+otherwise, before anything else runs), and each role is served by its own engine: its own
+schema slice, validator role, row filters and cache context (authz.py, DECISIONS.md D45).
+An answer id belongs to the requester it was given to; follow-ups and feedback naming
+another requester's answer are treated as unknown. Without a roles file the server is the
+single-user local tool it always was.
 """
 
 from __future__ import annotations
@@ -28,15 +36,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from .cache import AnswerCache, CachedTextToSQL, CacheSettings
+from .authz import ADMIN, Principal, Unauthorized, load_authorizer
+from .cache import AnswerCache, CachedTextToSQL, CacheSettings, canonical_question
 from .clarify import Clarifier
 from .config import Settings
 from .errors import MizanError, ProviderError
 from .generate import TextToSQL
+from .guardrails import validate
 from .logging import configure, get_logger, run_context
 from .nl import detect_script
 from .present import chart_spec, explain, summarize
@@ -133,8 +143,12 @@ def create_app(
 
     state: dict[str, Any] = {"warmup": "running", "last_used": time.monotonic()}
     #: Recent answers by id, so feedback names an answer instead of carrying SQL. Bounded:
-    #: feedback is given right after an answer, not days later.
-    recent: OrderedDict[str, tuple[str, str, str]] = OrderedDict()
+    #: feedback is given right after an answer, not days later. Each entry is
+    #: ``(question, sql, model reply, subject)``: the subject is whose answer it is.
+    recent: OrderedDict[str, tuple[str, str, str, str]] = OrderedDict()
+    #: One serving engine per restricted role, built on first use.
+    role_engines: dict[str, CachedTextToSQL] = {}
+    role_lock = threading.Lock()
     recent_lock = threading.Lock()
     ready = threading.Event()
     stop_keep_warm = threading.Event()
@@ -179,6 +193,7 @@ def create_app(
         state["cache"] = cache
         state["served"] = CachedTextToSQL(state["engine"], cache, cache_settings)
         # Ambiguous business terms, next to the glossary: <db>.clarifications.json.
+        state["authorizer"] = load_authorizer(cfg.db_path)
         state["clarifier"] = Clarifier.from_file(cfg.db_path.with_suffix(".clarifications.json"))
         state["suggester"] = Suggester(q for _, q in curated_questions(names_from_db(cfg.db_path)))
         if state["provider"].name != "mock":
@@ -201,6 +216,33 @@ def create_app(
         state.clear()
 
     app = FastAPI(title="Text-to-SQL Guardrails", version="0.1.0", lifespan=lifespan)
+
+    def principal(request: Request) -> Principal:
+        """Who is asking: from the bearer token, or the local admin without a roles file."""
+        authorizer = state.get("authorizer")
+        if authorizer is None:
+            return ADMIN
+        try:
+            who: Principal = authorizer.authenticate(request.headers.get("authorization"))
+            return who
+        except Unauthorized as exc:
+            raise HTTPException(
+                status_code=401, detail=exc.message, headers={"WWW-Authenticate": "Bearer"}
+            ) from exc
+
+    def served_for(who: Principal) -> CachedTextToSQL:
+        """The serving engine for ``who``'s role. Roles that limit nothing share the default."""
+        role = who.role
+        if role.tables is None and not role.deny_columns and not role.row_filters:
+            served: CachedTextToSQL = state["served"]
+            return served
+        with role_lock:
+            if role.name not in role_engines:
+                engine = TextToSQL(
+                    state["catalog"], state["provider"], cfg, masker=state["masker"], role=role
+                )
+                role_engines[role.name] = CachedTextToSQL(engine, state["cache"], cache_settings)
+            return role_engines[role.name]
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Any) -> Response:
@@ -261,16 +303,17 @@ def create_app(
         }
 
     @app.post("/api/feedback")
-    def feedback(request: FeedbackRequest) -> dict[str, Any]:
+    def feedback(request: FeedbackRequest, who: Principal = Depends(principal)) -> dict[str, Any]:
         """👍 marks an answer verified; 👎 stops it being served from the cache and flags it
         for the next person. Every verdict is logged for review (logs/feedback.jsonl)."""
         with recent_lock:
             entry = recent.get(request.answer_id)
-        if entry is None:
+        if entry is None or entry[3] != who.subject:
+            # Another requester's answer is no different from an unknown one.
             raise HTTPException(status_code=404, detail="unknown or expired answer id")
-        question, sql, _ = entry
-        served: CachedTextToSQL = state["served"]
-        masked = state["engine"].mask_question(question)
+        question, sql, _, _ = entry
+        served = served_for(who)
+        masked = served.engine.mask_question(question)
         up = request.verdict == "up"
         served.verdict(question, sql, up)
         record = {
@@ -281,6 +324,7 @@ def create_app(
             "question": masked.text if masked.bindings else question,
             "sql": sql,
             "model": state["provider"].model,
+            "role": who.role.name,
         }
         with (cfg.log_dir / "feedback.jsonl").open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -288,22 +332,37 @@ def create_app(
 
     @app.get("/api/suggest")
     async def suggest(
-        q: str = Query("", max_length=300), limit: int = Query(8, ge=1, le=20)
+        q: str = Query("", max_length=300),
+        limit: int = Query(8, ge=1, le=20),
+        who: Principal = Depends(principal),
     ) -> dict[str, Any]:
-        """Curated questions matching what has been typed, cached ("instant") ones first."""
-        served: CachedTextToSQL = state["served"]
+        """Curated questions matching what has been typed, cached ("instant") ones first.
+
+        For a restricted role, a question whose known (cached) query the role may not run is
+        not offered. A question never answered yet can't be checked and is offered as usual;
+        asking it gets the normal ``not_authorized`` answer.
+        """
+        served = served_for(who)
+        default: CachedTextToSQL = state["served"]
         cache = state.get("cache")
 
         def status_of(key: str) -> int | None:
             entry = cache.status(served.context, key) if cache is not None else None
             return entry[1] if entry else None
 
-        found = state["suggester"].suggest(q, status_of=status_of, limit=limit)
-        return {"suggestions": [s.to_dict() for s in found]}
+        def allowed(question: str) -> bool:
+            if served is default or cache is None:
+                return True
+            known = cache.status(default.context, canonical_question(question))
+            return known is None or validate(known[0], state["catalog"], role=who.role).ok
+
+        found = state["suggester"].suggest(q, status_of=status_of, limit=limit * 3)
+        kept = [s for s in found if allowed(s.question)][:limit]
+        return {"suggestions": [s.to_dict() for s in kept]}
 
     @app.get("/api/schema")
-    async def schema() -> dict[str, Any]:
-        catalog = state["catalog"]
+    async def schema(who: Principal = Depends(principal)) -> dict[str, Any]:
+        catalog = state["catalog"].restricted(who.role)
         return {
             "ddl": catalog.to_prompt(languages=("ar", "ur")),
             "tables": {
@@ -323,8 +382,8 @@ def create_app(
     # call would freeze the event loop, and with it every other request, health checks
     # included, until the model replied.
     @app.post("/api/ask", response_model=AskResponse)
-    def ask(request: AskRequest) -> AskResponse:
-        served: CachedTextToSQL = state["served"]
+    def ask(request: AskRequest, who: Principal = Depends(principal)) -> AskResponse:
+        served = served_for(who)
         clarifier: Clarifier = state["clarifier"]
         state["last_used"] = time.monotonic()
         hit = None
@@ -362,8 +421,9 @@ def create_app(
         if request.follow_up_of:
             with recent_lock:
                 earlier = recent.get(request.follow_up_of)
-            if earlier is not None:  # an expired id: answer the question on its own
-                follow_up_of, _, earlier_reply = earlier
+            # An expired id, or someone else's: answer the question on its own.
+            if earlier is not None and earlier[3] == who.subject:
+                follow_up_of, _, earlier_reply, _ = earlier
                 context = ((follow_up_of, earlier_reply),)
 
         with run_context() as run_id:
@@ -376,10 +436,11 @@ def create_app(
                         state["provider"],
                         cfg.model_copy(update={"self_consistency_n": request.samples}),
                         masker=state["masker"],
+                        role=served.engine.role,
                     )
-                    answer = engine.ask(question, context)
+                    answer = engine.ask(question, context, who.attrs)
                 else:
-                    answer, hit = served.ask(question, context)
+                    answer, hit = served.ask(question, context, who.attrs)
             except ProviderError as exc:
                 logger.error("provider failure", extra={"error": str(exc), "run_id": run_id})
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -394,7 +455,12 @@ def create_app(
             with recent_lock:
                 # The model's own reply where there is one: a follow-up puts it back in the
                 # conversation, and identical text lets the model server reuse its cache.
-                recent[answer_id] = (answer.question, answer.sql, answer.raw_output or answer.sql)
+                recent[answer_id] = (
+                    answer.question,
+                    answer.sql,
+                    answer.raw_output or answer.sql,
+                    who.subject,
+                )
                 while len(recent) > 500:
                     recent.popitem(last=False)
         return AskResponse(
