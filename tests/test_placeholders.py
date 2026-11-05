@@ -109,6 +109,16 @@ class TestValidator:
         report = validate(ORDERS_OF.format(":customer_name_1"), catalog)
         assert report.rules_fired == ["unknown_placeholder"]
 
+    def test_a_quoted_placeholder_name_without_its_colon_is_rejected(
+        self, catalog: Catalog
+    ) -> None:
+        # Found by the privacy eval: qwen2.5:7b wrote `= 'customer_name_1'`, which ran and
+        # silently matched nothing. It is the same mistake as quoting it with the colon.
+        report = validate(
+            ORDERS_OF.format("'customer_name_1'"), catalog, placeholders={"customer_name_1"}
+        )
+        assert report.rules_fired == ["quoted_placeholder"]
+
     def test_a_quoted_placeholder_is_rejected(self, catalog: Catalog) -> None:
         # Quoted, it is the literal text ':customer_name_1' and silently matches nothing.
         report = validate(
