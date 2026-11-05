@@ -118,6 +118,9 @@ class AskResponse(BaseModel):
     clarified_as: str | None = None
     #: The earlier question this one followed up on.
     follow_up_of: str | None = None
+    #: Private values sent to the model as placeholders: ``{"name", "column"}`` each, never
+    #: the value (privacy.py).
+    placeholders: list[dict[str, str | None]] = Field(default_factory=list)
 
 
 #: How often an idle server re-sends its warm-up. Well inside the 30-minute keep-alive, so the
@@ -297,6 +300,8 @@ def create_app(
             "warmup": state.get("warmup"),
             "cached_answers": cache.count(served.context) if cache and served else None,
             "ok": cfg.db_path.exists() and provider is not None,
+            # Whether data endpoints need a bearer token (a roles file is loaded).
+            "auth": state.get("authorizer") is not None,
             "database": str(cfg.db_path),
             "provider": provider.name if provider else None,
             "model": provider.model if provider else None,
@@ -496,6 +501,13 @@ def create_app(
             and served.reported(question, answer.sql or ""),
             clarified_as=clarified_as,
             follow_up_of=follow_up_of,
+            placeholders=[
+                {
+                    "name": f":{name}",
+                    "column": f"{b.table}.{b.column}" if b.table and b.column else None,
+                }
+                for name, b in answer.bindings.items()
+            ],
         )
 
     return app
