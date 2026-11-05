@@ -289,6 +289,16 @@ def _check_placeholders(tree: exp.Expression, issued: frozenset[str]) -> list[Vi
     """
     listed = ", ".join(f":{name}" for name in sorted(issued)) or "none"
     violations: list[Violation] = []
+    # SQLite binds @name and $name from the same parameters as :name (Python's sqlite3 strips
+    # the prefix), so any other spelling of a parameter is refused outright: it would reach
+    # a bound value, the requester's own :_user_* attributes included, past this check.
+    for parameter in tree.find_all(exp.Parameter):
+        violations.append(
+            Violation(
+                "unknown_placeholder",
+                f"'@{parameter.name}' was not given; the placeholders for this question: {listed}",
+            )
+        )
     for node in tree.find_all(exp.Placeholder):
         if node.name not in issued:
             shown = f":{node.name}" if node.name else "?"
@@ -671,6 +681,24 @@ def _check_authorization(
     for star in tree.find_all(exp.Star):
         if isinstance(star.parent, exp.Select):  # SELECT *, not COUNT(*)
             denied += [f"every column of {t} (*)" for t in readable if role.hides_columns(t)]
+
+    # Join keys are not ``exp.Column`` nodes, and SQLite's authorizer reports no read for a
+    # column used only to join, so neither layer would otherwise see them: `JOIN customers
+    # USING (name_en)` against a one-row derived table answered "does a customer called X
+    # exist?" for a role that can't read names. A USING key counts against every referenced
+    # table that has it; a NATURAL join, which joins on columns it never names, against
+    # every table it could cover.
+    for join in tree.find_all(exp.Join):
+        for key in (u.name.lower() for u in join.args.get("using") or []):
+            denied += [
+                f"{t}.{key} (a join key)"
+                for t in readable
+                if catalog.has_column(t, key) and not role.can_read(t, key)
+            ]
+        if str(join.args.get("method") or "").upper() == "NATURAL":
+            denied += [
+                f"every column of {t} (NATURAL JOIN)" for t in readable if role.hides_columns(t)
+            ]
 
     return [
         Violation("not_authorized", f"role {role.name!r} cannot read {what}")

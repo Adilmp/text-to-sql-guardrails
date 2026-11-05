@@ -199,7 +199,10 @@ class TextToSQL:
         )
         # Built once: it is identical for every question (prompt.py), which is what lets
         # the backend's prompt cache serve every request after the first.
-        self.system_prompt = build_system_prompt(catalog.restricted(role) if role else catalog)
+        #: The catalog as the role may see it: what the prompt and every repair hint are
+        #: built from. Validation and execution use the full catalog plus the role.
+        self.visible_catalog = catalog.restricted(role) if role else catalog
+        self.system_prompt = build_system_prompt(self.visible_catalog)
 
     def warm_up(self) -> float | None:
         """Make the backend read the system prompt now, so the first user doesn't wait.
@@ -248,16 +251,22 @@ class TextToSQL:
         system = self.system_prompt
         # Earlier questions are masked first, in order, so a follow-up's placeholders keep
         # the names the earlier SQL used and new values are numbered after them.
+        # `issued` is what the masker gave out, for consistent numbering; `bindings` is the
+        # same with any column the role can't read removed, which is what everything else sees.
+        issued: dict[str, Binding] = {}
         bindings: dict[str, Binding] = {}
         prior: list[Turn] = []
         for earlier_question, earlier_reply in context:
-            earlier_text, earlier_bindings = self._mask(clean_for_model(earlier_question), bindings)
+            earlier_text, earlier_issued = self._mask(clean_for_model(earlier_question), issued)
+            issued.update(earlier_issued)
+            earlier_bindings = self._visible(earlier_issued)
             bindings.update(earlier_bindings)
             prior += [
                 ("user", build_user_prompt(earlier_text, bindings=earlier_bindings)),
                 ("assistant", earlier_reply),
             ]
-        masked_text, question_bindings = self._mask(cleaned, bindings)
+        masked_text, question_issued = self._mask(cleaned, issued)
+        question_bindings = self._visible(question_issued)
         bindings.update(question_bindings)
         user = build_user_prompt(masked_text, bindings=question_bindings)
 
@@ -343,7 +352,24 @@ class TextToSQL:
     def mask_question(self, question: str) -> Masked:
         """``question`` as the model would see it: cleaned, private values masked."""
         text, bindings = self._mask(clean_for_model(question), {})
-        return Masked(text, bindings)
+        return Masked(text, self._visible(bindings))
+
+    def _visible(self, bindings: dict[str, Binding]) -> dict[str, Binding]:
+        """``bindings`` without the columns this engine's role can't read.
+
+        The value is still masked (the model never sees a customer's name, whatever the
+        role), but the prompt no longer says which hidden column it came from, and grounding
+        has no column to check it against.
+        """
+        role = self.role
+        if role is None:
+            return bindings
+        return {
+            name: b
+            if not (b.table and b.column) or role.can_read(b.table, b.column)
+            else Binding(b.value)
+            for name, b in bindings.items()
+        }
 
     def _mask(self, text: str, known: dict[str, Binding]) -> tuple[str, dict[str, Binding]]:
         if self.masker is None:
@@ -458,7 +484,11 @@ class TextToSQL:
         history: list[Turn] = [*prior, ("user", user), ("assistant", chosen.raw_text)]
         for _ in range(self.settings.max_repairs):
             problem: Problem | None = diagnose(
-                current.guardrail, current.error, current.grounding, self.catalog, current.raw_text
+                current.guardrail,
+                current.error,
+                current.grounding,
+                self.visible_catalog,
+                current.raw_text,
             )
             if problem is None:
                 break
