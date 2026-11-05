@@ -29,6 +29,15 @@ what the eval measures, and the follow-up suite measures the rest (DECISIONS.md 
 earlier reply is the model's own text where there is one, so the processed prompt it left in
 the model server's cache matches and only the new question is read.
 
+Private values
+--------------
+With a ``masker`` (privacy.py), private values in the question (customer names, emails,
+phone and ID numbers) are replaced by typed placeholders before anything reaches the model,
+earlier questions of a follow-up included. The model writes ``:customer_name_1`` in its SQL,
+the validator accepts only the placeholders that were issued, and the executor binds the
+real values as SQLite parameters. ``Answer.sql`` keeps the placeholders; ``Answer.bindings``
+holds the values, server side (DECISIONS.md D44).
+
 Self-consistency
 ----------------
 When ``self_consistency_n > 1`` the model is sampled several times and the candidates are
@@ -42,7 +51,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -59,6 +68,7 @@ from ..guardrails import (
 from ..logging import get_logger
 from ..nl.detect import Script, detect_script
 from ..nl.normalize import clean_for_model
+from ..privacy import Binding, Masker
 from ..providers.base import Provider, Turn
 from ..schema.catalog import Catalog
 from ..validate.confidence import Confidence, rejected, score_answer
@@ -125,6 +135,9 @@ class Answer:
     #: Every guardrail rule that fired on any attempt, in order, including attempts that a
     #: repair replaced. Telemetry must not lose what the model first tried.
     rules_seen: tuple[str, ...] = ()
+    #: The real values behind the placeholders in ``sql``. Never sent to the model, and
+    #: left out of ``to_dict`` (which names each placeholder's column only).
+    bindings: dict[str, Binding] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -149,6 +162,9 @@ class Answer:
             "raw_output": self.raw_output,
             "repairs": self.repairs,
             "rules_seen": list(self.rules_seen),
+            "placeholders": {
+                name: {"table": b.table, "column": b.column} for name, b in self.bindings.items()
+            },
         }
 
 
@@ -161,8 +177,10 @@ class TextToSQL:
         provider: Provider,
         settings: Settings,
         policy: GuardrailPolicy | None = None,
+        masker: Masker | None = None,
     ) -> None:
         self.catalog = catalog
+        self.masker = masker
         self.provider = provider
         self.settings = settings
         self.policy = policy or GuardrailPolicy(
@@ -210,13 +228,20 @@ class TextToSQL:
             return self._failed(question, cleaned, script, started, "empty question")
 
         system = self.system_prompt
-        user = build_user_prompt(cleaned)
+        # Earlier questions are masked first, in order, so a follow-up's placeholders keep
+        # the names the earlier SQL used and new values are numbered after them.
+        bindings: dict[str, Binding] = {}
         prior: list[Turn] = []
         for earlier_question, earlier_reply in context:
+            earlier_text, earlier_bindings = self._mask(clean_for_model(earlier_question), bindings)
+            bindings.update(earlier_bindings)
             prior += [
-                ("user", build_user_prompt(clean_for_model(earlier_question))),
+                ("user", build_user_prompt(earlier_text, bindings=earlier_bindings)),
                 ("assistant", earlier_reply),
             ]
+        masked_text, question_bindings = self._mask(cleaned, bindings)
+        bindings.update(question_bindings)
+        user = build_user_prompt(masked_text, bindings=question_bindings)
 
         logger.info(
             "question received",
@@ -224,7 +249,7 @@ class TextToSQL:
         )
 
         try:
-            candidates = self._sample(system, user, prior)
+            candidates = self._sample(system, user, prior, bindings)
         except ProviderError as exc:
             return self._failed(question, cleaned, script, started, str(exc), code=exc.code)
 
@@ -234,7 +259,7 @@ class TextToSQL:
         chosen, agreement = self._choose(candidates)
         rules_seen = [rule for c in candidates for rule in c.guardrail.rules_fired]
         try:
-            chosen, attempts = self._repair(system, user, chosen, prior)
+            chosen, attempts = self._repair(system, user, chosen, prior, bindings)
         except ProviderError as exc:
             # The model server failed mid-repair. The first answer still stands; report it
             # rather than throwing away a query that was (at worst) imperfect.
@@ -262,6 +287,7 @@ class TextToSQL:
                 raw_output=chosen.raw_text,
                 repairs=repairs,
                 rules_seen=tuple(rules_seen),
+                bindings=bindings,
             )
 
         confidence = score_answer(
@@ -291,14 +317,23 @@ class TextToSQL:
             raw_output=chosen.raw_text,
             repairs=repairs,
             rules_seen=tuple(rules_seen),
+            bindings=bindings,
         )
 
     # ------------------------------------------------------------------ internals
 
-    def _evaluate(self, raw_text: str) -> Candidate:
+    def _mask(self, text: str, known: dict[str, Binding]) -> tuple[str, dict[str, Binding]]:
+        if self.masker is None:
+            return text, {}
+        masked = self.masker.mask(text, known=known)
+        return masked.text, masked.bindings
+
+    def _evaluate(self, raw_text: str, bindings: Mapping[str, Binding]) -> Candidate:
         """Extract, validate, execute and ground one model reply."""
         sql = extract_sql(raw_text)
-        report = validate(sql, self.catalog, self.policy, raw_output=raw_text)
+        report = validate(
+            sql, self.catalog, self.policy, raw_output=raw_text, placeholders=bindings.keys()
+        )
         candidate = Candidate(raw_text=raw_text, sql=sql, guardrail=report)
         if not report.ok:
             return candidate
@@ -308,15 +343,28 @@ class TextToSQL:
                 self.settings.db_path,
                 max_rows=self.settings.max_rows,
                 timeout_s=self.settings.query_timeout_s,
+                params={name: b.value for name, b in bindings.items()},
             )
         except (ExecutionError, MizanError) as exc:
             candidate.error = str(exc)
             logger.info("candidate failed to execute", extra={"error": str(exc)})
             return candidate
-        candidate.grounding = check_values(report.sql, self.catalog, self.settings.db_path)
+        candidate.grounding = check_values(
+            report.sql,
+            self.catalog,
+            self.settings.db_path,
+            bindings=bindings,
+            sensitive=self.masker.sensitive_columns if self.masker else (),
+        )
         return candidate
 
-    def _sample(self, system: str, user: str, prior: Sequence[Turn] = ()) -> list[Candidate]:
+    def _sample(
+        self,
+        system: str,
+        user: str,
+        prior: Sequence[Turn] = (),
+        bindings: Mapping[str, Binding] | None = None,
+    ) -> list[Candidate]:
         """Generate, extract, validate and execute each sample."""
         candidates: list[Candidate] = []
         n = self.settings.self_consistency_n
@@ -333,11 +381,16 @@ class TextToSQL:
                 temperature=temperature,
                 max_tokens=self.settings.max_output_tokens,
             )
-            candidates.append(self._evaluate(completion.text))
+            candidates.append(self._evaluate(completion.text, bindings or {}))
         return candidates
 
     def _repair(
-        self, system: str, user: str, chosen: Candidate, prior: Sequence[Turn] = ()
+        self,
+        system: str,
+        user: str,
+        chosen: Candidate,
+        prior: Sequence[Turn] = (),
+        bindings: Mapping[str, Binding] | None = None,
     ) -> tuple[Candidate, list[Candidate]]:
         """Show the model what is wrong with its query, up to ``max_repairs`` times.
 
@@ -363,7 +416,7 @@ class TextToSQL:
                 temperature=self.settings.temperature,
                 max_tokens=self.settings.max_output_tokens,
             )
-            current = self._evaluate(completion.text)
+            current = self._evaluate(completion.text, bindings or {})
             attempts.append(current)
             history += [("user", problem.feedback), ("assistant", completion.text)]
             if current.rank >= best.rank:

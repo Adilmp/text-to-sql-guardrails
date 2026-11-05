@@ -30,6 +30,7 @@ effects we cannot reason about.
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -165,11 +166,16 @@ def validate(
     policy: GuardrailPolicy | None = None,
     *,
     raw_output: str | None = None,
+    placeholders: Collection[str] | None = None,
 ) -> GuardrailReport:
     """Validate ``sql`` against ``policy`` and (optionally) a real schema ``catalog``.
 
     ``raw_output`` is the model's whole reply, when ``sql`` was extracted from one. It is
     checked for a second statement that extraction cut off (decision D4).
+
+    ``placeholders`` are the names (without the colon) the masker issued for this question
+    (privacy.py). Any other parameter in the query is rejected, so the model can't reach a
+    value it wasn't given, including the requester's own ``:_user_*`` attributes.
 
     Returns a report rather than raising, so the eval harness can count *which* rule fired
     on every rejected query instead of seeing a single opaque failure.
@@ -212,6 +218,7 @@ def validate(
     violations.extend(_check_statement_kind(tree, policy))
     violations.extend(_check_functions(tree, policy))
     violations.extend(_check_complexity(tree, policy))
+    violations.extend(_check_placeholders(tree, frozenset(placeholders or ())))
 
     tables = _collect_tables(tree)
     columns = _collect_columns(tree)
@@ -256,6 +263,37 @@ def validate(
         columns=frozenset(columns),
         functions=frozenset(functions),
     )
+
+
+# ----------------------------------------------------------------------- placeholders
+
+_QUOTED_PLACEHOLDER_RE = re.compile(r":(\w+)")
+
+
+def _check_placeholders(tree: exp.Expression, issued: frozenset[str]) -> list[Violation]:
+    """Only issued placeholders, and never inside quotes.
+
+    Quoted, ``':customer_name_1'`` is the literal text, which silently matches no row; it is
+    rejected so the repair loop can say "without quotes" instead of answering 0.
+    """
+    listed = ", ".join(f":{name}" for name in sorted(issued)) or "none"
+    violations: list[Violation] = []
+    for node in tree.find_all(exp.Placeholder):
+        if node.name not in issued:
+            shown = f":{node.name}" if node.name else "?"
+            violations.append(
+                Violation(
+                    "unknown_placeholder",
+                    f"{shown!r} was not given; the placeholders for this question: {listed}",
+                )
+            )
+    for literal in tree.find_all(exp.Literal):
+        match = _QUOTED_PLACEHOLDER_RE.fullmatch(literal.name) if literal.is_string else None
+        if match and match.group(1) in issued:
+            violations.append(
+                Violation("quoted_placeholder", f"{literal.sql(dialect=DIALECT)} is quoted")
+            )
+    return violations
 
 
 # ----------------------------------------------------------------------- statement kind
