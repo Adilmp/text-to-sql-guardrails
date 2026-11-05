@@ -202,9 +202,12 @@ class TestNoOp:
 
     @pytest.mark.parametrize("suite", sorted(SUITES))
     def test_every_eval_question_is_unchanged(self, full_db: Path, suite: str) -> None:
-        # The guarantee behind "existing evals are byte-identical with masking on".
+        # The guarantee behind "existing evals are byte-identical with masking on". The
+        # privacy suites (tag "pii") name customers on purpose and are the exception.
         masker = Masker.from_db(full_db, SENSITIVE)
         for case in SUITES[suite]():
+            if "pii" in case.tags:
+                continue
             question = clean_for_model(case.question)
             masked = masker.mask(question)
             assert masked.text == question, case.id
