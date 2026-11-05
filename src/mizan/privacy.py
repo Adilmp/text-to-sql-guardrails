@@ -43,6 +43,11 @@ from .schema.catalog import quote_identifier
 #: between letters ("Ali-Baba" is one word, so "Ali" is not inside it).
 _WORD_RE = re.compile(r"(?:[\wً-ٰٟ]|(?<=\w)[-'’](?=\w))+")
 
+#: An English possessive on the last word of a name ("Al Harbi's"): matched without it,
+#: and kept in the text after the placeholder. Found by the privacy eval, where
+#: "Hessa Al Harbi's orders" went to the model unmasked.
+_POSSESSIVE_RE = re.compile(r"['’]s$", re.IGNORECASE)
+
 #: Placeholder-looking text the user typed. Issued names never reuse one of these.
 _TYPED_PLACEHOLDER_RE = re.compile(r":([A-Za-z_]\w*)")
 
@@ -143,6 +148,7 @@ class Masker:
         for candidates in index.values():
             candidates.sort(key=lambda item: len(item[0]), reverse=True)
         self._index = index
+        self._folded = sorted({(entry.value, _key(entry.value)) for entry in values_seen})
         #: ``(table, column)`` for every column values were loaded from. Grounding never
         #: offers stored values of these columns to the model as suggestions.
         self.sensitive_columns = frozenset({(v.table, v.column) for v in values_seen})
@@ -189,8 +195,8 @@ class Masker:
             if matched is None:
                 i += 1
                 continue
-            length, entry = matched
-            start, end = words[i].start(), words[i + length - 1].end()
+            length, entry, end = matched
+            start = words[i].start()
             hits.append((start, end, entry.prefix, Binding(entry.value, entry.table, entry.column)))
             i += length
 
@@ -198,17 +204,46 @@ class Masker:
             return Masked(text)
         return _replace(text, sorted(hits, key=lambda hit: hit[0]), known or {})
 
+    def find_values(self, text: str) -> list[str]:
+        """Stored private values that occur in ``text``, in any spelling (the leak check).
+
+        Compared after ``normalize_for_matching`` as well as verbatim, so a value sent with
+        another case, without the madda or with Urdu letters still counts. This is how the
+        eval counts what reached the model (``private_values_sent``).
+        """
+        folded = _key(text)
+        return [value for value, key in self._folded if value in text or key in folded]
+
     def _match_at(
         self, text: str, words: list[re.Match[str]], i: int
-    ) -> tuple[int, SensitiveValue] | None:
-        for keys, entry in self._index.get(_key(words[i].group()), ()):
+    ) -> tuple[int, SensitiveValue, int] | None:
+        """``(words matched, value, end offset)`` of the longest value starting at word ``i``.
+
+        The end offset stops before a possessive on the last word, so "Al Harbi's" becomes
+        ":customer_name_1's".
+        """
+        first = words[i].group()
+        candidates = [*self._index.get(_key(first), ())]
+        if (stem := _POSSESSIVE_RE.sub("", first)) != first:
+            candidates += self._index.get(_key(stem), ())
+        for keys, entry in sorted(candidates, key=lambda item: len(item[0]), reverse=True):
             n = len(keys)
             span = words[i : i + n]
-            if len(span) < n or any(_key(w.group()) != k for w, k in zip(span, keys, strict=True)):
+            if len(span) < n:
+                continue
+            *body, last = span
+            if any(_key(w.group()) != k for w, k in zip(body, keys, strict=False)):
+                continue
+            word = last.group()
+            if _key(word) == keys[-1]:
+                end = last.end()
+            elif _key(stripped := _POSSESSIVE_RE.sub("", word)) == keys[-1]:
+                end = last.start() + len(stripped)
+            else:
                 continue
             # The words of a name are separated by spaces only: "Tariq, Al Thani" is a list.
             if all(text[a.end() : b.start()].isspace() for a, b in pairwise(span)):
-                return n, entry
+                return n, entry, end
         return None
 
 

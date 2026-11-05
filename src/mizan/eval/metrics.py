@@ -31,7 +31,7 @@ answer" and "right answer, extra column" is visible instead of argued about (D32
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import combinations
 from pathlib import Path
@@ -118,6 +118,10 @@ class CaseOutcome:
     #: Every reply the model gave for this case, in order, when there was more than one
     #: (self-consistency samples, then repairs). ``raw_output`` is the one that was used.
     attempts: tuple[str, ...] = ()
+    #: How many stored private values (customer names) appeared in anything sent to the
+    #: model for this case. Measured on the privacy suites only; ``None`` elsewhere, and then
+    #: left out of the record, so other suites' records are unchanged.
+    private_values_sent: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -142,6 +146,11 @@ class CaseOutcome:
             "repairs": self.repairs,
             "rules_seen": list(self.rules_seen),
             "attempts": list(self.attempts),
+            **(
+                {"private_values_sent": self.private_values_sent}
+                if self.private_values_sent is not None
+                else {}
+            ),
         }
 
 
@@ -174,6 +183,9 @@ class SuiteSummary:
     repaired_correct: int = 0
     #: One-off cost of loading the model and reading the prompt before the first case.
     warmup_ms: float | None = None
+    #: Cases in which at least one stored private value reached the model. ``None`` when no
+    #: case was measured (every suite but the privacy ones).
+    private_values_sent: int | None = None
 
     @property
     def accuracy(self) -> float:
@@ -206,6 +218,11 @@ class SuiteSummary:
             "repaired": self.repaired,
             "repaired_correct": self.repaired_correct,
             "warmup_ms": round(self.warmup_ms, 1) if self.warmup_ms is not None else None,
+            **(
+                {"private_values_sent": self.private_values_sent}
+                if self.private_values_sent is not None
+                else {}
+            ),
         }
 
 
@@ -223,8 +240,15 @@ def score_prediction(
     db_path: Path,
     *,
     max_rows: int = 1000,
+    params: Mapping[str, str] | None = None,
+    predicted_rows: tuple[tuple[Any, ...], ...] | None = None,
 ) -> Match:
     """Compare a prediction's result with every acceptable gold result.
+
+    ``params`` binds the prediction's placeholders (privacy.py). ``predicted_rows`` replaces
+    running the prediction at all, for a caller that must run it its own way: a role's
+    query runs through its row filters (``TextToSQL.run_query``), and the gold is that
+    role's expected answer.
 
     ``strict``: the result sets are identical, ignoring row and column order. ``relaxed``:
     every gold column is present in the prediction with the same rows, and the prediction may
@@ -246,10 +270,15 @@ def score_prediction(
     if not gold_rows:
         return Match(strict=False, relaxed=False)
 
-    try:
-        predicted = execute(predicted_sql, db_path, max_rows=max_rows, timeout_s=15.0).rows
-    except MizanError:
-        return Match(strict=False, relaxed=False)
+    if predicted_rows is not None:
+        predicted = predicted_rows
+    else:
+        try:
+            predicted = execute(
+                predicted_sql, db_path, max_rows=max_rows, timeout_s=15.0, params=params
+            ).rows
+        except MizanError:
+            return Match(strict=False, relaxed=False)
 
     strict = any(_normalise(rows) == _normalise(predicted) for rows in gold_rows)
     relaxed = strict or any(_contains_columns(predicted, rows) for rows in gold_rows)
@@ -350,6 +379,9 @@ def summarise(
         summary.correct_relaxed = sum(relaxed)
     summary.repaired = sum(o.repairs > 0 for o in outcomes)
     summary.repaired_correct = sum(o.repairs > 0 and o.correct for o in outcomes)
+    measured = [o.private_values_sent for o in outcomes if o.private_values_sent is not None]
+    if measured:
+        summary.private_values_sent = sum(n > 0 for n in measured)
 
     for outcome in outcomes:
         _bump(summary.by_language, outcome.language, outcome.correct)

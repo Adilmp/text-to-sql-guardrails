@@ -138,6 +138,13 @@ class Authorizer:
             tokens[digest.lower()] = Principal(role, attrs, digest.lower()[:12])
         return cls(roles, tokens)
 
+    def attrs_for_role(self, role: str) -> dict[str, str]:
+        """The attributes of the first token with ``role`` (the eval asks as that requester)."""
+        for principal in self._tokens.values():
+            if principal.role.name == role:
+                return dict(principal.attrs)
+        return {}
+
     def authenticate(self, header: str | None) -> Principal:
         """The principal for an ``Authorization: Bearer <token>`` header, or raise."""
         scheme, _, token = (header or "").strip().partition(" ")

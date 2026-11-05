@@ -92,6 +92,10 @@ extend-immutable-calls = ["fastapi.Depends"]
 # S108: the "/tmp/..." literals are paths the Zip Slip test asserts are *never created*.
 # S608: the test builds an intentionally malformed query to prove the validator rejects it.
 "tests/**" = ["S101", "S108", "S608"]
+# S608: the privacy and role suites build gold SQL from constants in the same file (the
+# Saudi row-filter subqueries, the orders-customers join) so the cases can't drift apart.
+# No input reaches these strings.
+"src/mizan/eval/access.py" = ["S608"]
 
 [tool.mypy]
 python_version = "3.10"
