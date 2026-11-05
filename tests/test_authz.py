@@ -211,6 +211,17 @@ class TestValidator:
             ("demo-analyst", "SELECT * FROM customers"),
             ("demo-analyst", "SELECT c.* FROM customers c"),
             ("demo-analyst", "SELECT city FROM customers WHERE name_en LIKE 'T%'"),
+            # Join keys aren't column references, and SQLite's authorizer reports no read
+            # for them: a USING or NATURAL join on a hidden column was a lookup oracle
+            # ("does a customer called X exist?") that passed every layer.
+            (
+                "demo-analyst",
+                "SELECT COUNT(*) FROM (SELECT 'Tariq Al Thani' AS name_en) AS g "
+                "JOIN customers USING (name_en)",
+            ),
+            ("demo-analyst", "SELECT COUNT(*) FROM couriers JOIN customers USING (name_en)"),
+            ("demo-analyst", "SELECT COUNT(*) FROM couriers NATURAL JOIN customers"),
+            ("demo-analyst", "SELECT COUNT(*) FROM couriers NATURAL LEFT JOIN customers c"),
         ],
     )
     def test_reading_outside_the_role_is_not_authorized(
@@ -230,6 +241,7 @@ class TestValidator:
             ("demo-analyst", "SELECT city, COUNT(*) FROM customers GROUP BY city"),
             ("demo-analyst", "SELECT COUNT(*) FROM customers"),
             ("demo-analyst", "SELECT name_en FROM couriers"),
+            ("demo-analyst", "SELECT COUNT(*) FROM orders JOIN customers USING (customer_id)"),
         ],
     )
     def test_reading_inside_the_role_is_allowed(

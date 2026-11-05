@@ -88,6 +88,41 @@ class TestPipeline:
         assert not answer.ok and "not_authorized" in answer.guardrail.rules_fired  # type: ignore[union-attr]
         assert len(provider.calls) == 1  # never repaired
 
+    def test_repair_hints_name_only_the_roles_tables(
+        self, catalog: Catalog, settings: Settings
+    ) -> None:
+        # A hint built from the full schema would tell the model about hidden tables.
+        ops = Authorizer.from_dict(CONFIG).authenticate("Bearer demo-courier-ops")
+        provider = MockProvider(
+            script=[
+                "SELECT COUNT(*) FROM clients",
+                "SELECT COUNT(*) FROM orders o WHERE o.city = 'Dubai'",
+                "SELECT COUNT(*) FROM orders",
+            ]
+        )
+        engine = TextToSQL(catalog, provider, settings, role=ops.role)
+        engine.ask("how many orders are there?")
+        hints = [call.user for call in provider.calls[1:]]
+        assert hints, "expected at least one repair"
+        assert all("customers" not in hint for hint in hints), hints
+
+    def test_a_placeholder_never_names_a_column_the_role_cannot_read(
+        self, catalog: Catalog, settings: Settings, db_path: Path
+    ) -> None:
+        from mizan.privacy import Masker
+
+        analyst = Authorizer.from_dict(CONFIG).authenticate("Bearer demo-analyst")
+        masker = Masker.from_db(
+            db_path, {"customers.name_en": "customer_name", "customers.name_ar": "customer_name_ar"}
+        )
+        provider = MockProvider(script=["SELECT 1", "SELECT 1"])
+        engine = TextToSQL(catalog, provider, settings, masker=masker, role=analyst.role)
+        answer = engine.ask("how many orders did Tariq Al Thani place?")
+        sent = provider.calls[0].user
+        assert ":customer_name_1" in sent  # still masked: the name never reaches the model
+        assert "name_en" not in sent and "Tariq" not in sent
+        assert answer.bindings["customer_name_1"].column is None
+
     def test_without_a_role_nothing_changes(self, catalog: Catalog, settings: Settings) -> None:
         plain = TextToSQL(catalog, MockProvider(fixtures=FIXTURES), settings)
         admin = TextToSQL(catalog, MockProvider(fixtures=FIXTURES), settings, role=ADMIN.role)
