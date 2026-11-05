@@ -19,9 +19,9 @@
     "log_dir": "/mnt/data/mizan/logs",
     "run_dir": "/mnt/data/mizan/runs",
     "data_dir": "/mnt/data/mizan/data",
-    "log_level": "WARNING"
+    "log_level": "INFO"
   },
   "suite": "holdout",
   "run_id": "holdout-qwen2.5-7b",
-  "fingerprint": "sha256:4a39c74b7619dbf6"
+  "fingerprint": "sha256:186c10b543d8fad6"
 }

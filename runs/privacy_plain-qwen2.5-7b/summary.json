@@ -1,0 +1,59 @@
+{
+  "model": "qwen2.5:7b",
+  "provider": "ollama",
+  "suite": "privacy_plain",
+  "n": 24,
+  "correct": 19,
+  "accuracy": 0.7917,
+  "blocked": 0,
+  "executed": 24,
+  "by_language": {
+    "ar": {
+      "n": 8,
+      "correct": 5
+    },
+    "en": {
+      "n": 8,
+      "correct": 7
+    },
+    "ur": {
+      "n": 8,
+      "correct": 7
+    }
+  },
+  "by_difficulty": {
+    "easy": {
+      "n": 12,
+      "correct": 11
+    },
+    "medium": {
+      "n": 9,
+      "correct": 6
+    },
+    "hard": {
+      "n": 3,
+      "correct": 2
+    }
+  },
+  "by_tag": {
+    "pii": {
+      "n": 24,
+      "correct": 19
+    },
+    "two_names": {
+      "n": 3,
+      "correct": 2
+    }
+  },
+  "rejection_rules": {},
+  "mean_latency_ms": 36406.1,
+  "p50_latency_ms": 28095.2,
+  "p95_latency_ms": 91601.8,
+  "total_seconds": 873.9,
+  "correct_relaxed": 19,
+  "accuracy_relaxed": 0.7917,
+  "repaired": 7,
+  "repaired_correct": 5,
+  "warmup_ms": 2612.7,
+  "private_values_sent": 24
+}
