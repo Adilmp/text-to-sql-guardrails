@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from .authz import ADMIN, Principal, RolePolicy, Unauthorized, load_authorizer
@@ -58,6 +58,10 @@ from .schema import load_catalog
 logger = get_logger("api")
 
 WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
+#: The page's fonts (IBM Plex Sans and Plex Sans Arabic, subset to woff2, OFL). Served by
+#: name from a fixed list: the CSP allows fonts from this origin only, and nothing else in
+#: web/ is reachable through this route.
+FONTS = {p.name: p for p in (WEB_DIR / "fonts").glob("*.woff2")}
 
 
 class ClarificationChoice(BaseModel):
@@ -279,6 +283,7 @@ def create_app(
             "default-src 'none'; "
             "script-src 'unsafe-inline'; "
             "style-src 'unsafe-inline'; "
+            "font-src 'self'; "
             "connect-src 'self'; "
             "base-uri 'none'; "
             "form-action 'none'; "
@@ -295,6 +300,17 @@ def create_app(
         if not page.exists():
             raise HTTPException(status_code=500, detail="web/index.html is missing")
         return page.read_text(encoding="utf-8")
+
+    @app.get("/fonts/{name}")
+    async def font(name: str) -> FileResponse:
+        path = FONTS.get(name)
+        if path is None:
+            raise HTTPException(status_code=404, detail="no such font")
+        return FileResponse(
+            path,
+            media_type="font/woff2",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
