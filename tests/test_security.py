@@ -431,3 +431,83 @@ class TestRepairChannels:
             report = validate(attack, catalog)
             assert not report.ok
             assert diagnose(report, None, [], catalog) is None
+
+
+class TestReadProtectionWithoutValidator:
+    """A role's limits must hold at the driver even if every static check is bypassed.
+
+    The executor installs a SQLite authorizer for the role, so SQLite itself refuses to
+    read a table or column the role can't see. These tests call ``execute`` directly: no
+    validator, no prompt slice, nothing else in the way (DECISIONS.md D45, layer 4).
+    """
+
+    @staticmethod
+    def _role(name: str) -> object:
+        from mizan.authz import RolePolicy
+
+        return {
+            "courier_ops": RolePolicy(
+                "courier_ops", tables={"orders": None, "couriers": None, "warehouses": None}
+            ),
+            "analyst": RolePolicy(
+                "analyst",
+                deny_columns=frozenset({("customers", "name_en"), ("customers", "name_ar")}),
+            ),
+        }[name]
+
+    @pytest.mark.parametrize(
+        ("role", "sql"),
+        [
+            ("courier_ops", "SELECT COUNT(*) FROM customers"),
+            ("courier_ops", "SELECT o.order_id FROM orders o JOIN customers c USING (customer_id)"),
+            ("courier_ops", "SELECT 1 WHERE EXISTS (SELECT 1 FROM customers)"),
+            ("analyst", "SELECT name_en FROM customers"),
+            ("analyst", "SELECT * FROM customers"),
+            ("analyst", "SELECT (SELECT name_ar FROM customers LIMIT 1)"),
+            ("analyst", "WITH x AS (SELECT name_en AS n FROM customers) SELECT COUNT(n) FROM x"),
+            ("analyst", "SELECT city FROM customers WHERE name_en LIKE 'T%'"),
+            ("analyst", "SELECT COUNT(*) FROM customers GROUP BY length(name_en)"),
+        ],
+    )
+    def test_reads_outside_the_role_are_refused_by_sqlite(
+        self, role: str, sql: str, db_path: Path
+    ) -> None:
+        from mizan.errors import ExecutionError
+
+        with pytest.raises(ExecutionError, match="cannot read"):
+            execute(sql, db_path, role=self._role(role))  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        ("role", "sql"),
+        [
+            ("courier_ops", "SELECT COUNT(*) FROM orders"),
+            ("courier_ops", "SELECT c.name_en FROM couriers c JOIN orders o USING (courier_id)"),
+            ("analyst", "SELECT city, COUNT(*) FROM customers GROUP BY city"),
+            ("analyst", "SELECT COUNT(*) FROM customers"),
+            ("analyst", "SELECT name_en FROM couriers"),
+        ],
+    )
+    def test_reads_inside_the_role_still_work(self, role: str, sql: str, db_path: Path) -> None:
+        assert execute(sql, db_path, role=self._role(role)).rows  # type: ignore[arg-type]
+
+    def test_no_role_reads_everything(self, db_path: Path) -> None:
+        assert execute("SELECT name_en FROM customers LIMIT 1", db_path).rows
+
+    def test_a_row_filter_does_not_read_the_denied_columns(self, db_path: Path) -> None:
+        # The rewrite must select only readable columns: `SELECT *` in the filtered
+        # subquery would make SQLite report a read of every column, denied ones included,
+        # and refuse every query on a table that is both filtered and partly hidden.
+        from mizan.authz import Principal, RolePolicy, apply_row_filters
+        from mizan.schema import load_catalog
+
+        role = RolePolicy(
+            "ksa_analyst",
+            deny_columns=frozenset({("customers", "name_en"), ("customers", "name_ar")}),
+            row_filters={"customers": "country = :_user_country"},
+        )
+        who = Principal(role, {"country": "Saudi Arabia"}, "t")
+        sql, params = apply_row_filters(
+            "SELECT DISTINCT country FROM customers", who, load_catalog(db_path)
+        )
+        assert "name_en" not in sql
+        assert execute(sql, db_path, params=params, role=role).rows == (("Saudi Arabia",),)
