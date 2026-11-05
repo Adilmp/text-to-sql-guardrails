@@ -30,7 +30,7 @@ https://github.com/user-attachments/assets/b2fedc20-ca64-47de-8b22-003bfedd0c56
 | Held-out questions | **66.7%** (16/24) on 8 hard questions × 3 languages written *before* tuning and run once (was 29.2%) |
 | English / Arabic / Urdu | 18/20 · 17/20 · 16/20 on the development suite (Urdu is new; it scored 10/20 through the old Arabic path) |
 | Private values sent to the model | **0** of 24 questions naming customers, with masking, at the same accuracy (19/24) as without it, when names went out on all 24 |
-| Access by role | Four independent layers; **7/7** questions outside a role refused, 10/11 allowed ones right, each scored against that role's own answer |
+| Access by role | Four independent layers; **0 of 7** questions outside a role returned anything hidden (5 refused, 2 answered from what the role can see), 10/11 allowed ones right, each scored against that role's own answer |
 | Speed | 10 s median, 47 s p95 per question on a 6-core CPU in the latest run (8 s / 23 s in the run before it, with identical SQL: CPU latency moves with machine load); the ~3-minute one-off warm-up happens at startup |
 | Harmful statements executed | **0**: every answer to an adversarial prompt contained, across two models |
 | Tests | 636, all offline in under a minute, run in CI on Python 3.10–3.12 (71 security tests, plus 162 for masking and roles) |
@@ -239,8 +239,10 @@ logs. On 24 questions that name customers the model is as accurate with masking 
 (19/24), and the leak count goes from 24 cases to 0 ([results](docs/results.md)).
 
 What it doesn't cover is written down with the rest ([SECURITY.md](SECURITY.md) §4): row filters
-are enforced by the rewrite, not by SQLite; a first name alone or a misspelled name isn't a
-stored value, so it reaches the model as typed; the demo tokens are public.
+are enforced by the rewrite, not by SQLite; SQLite reports no read for a column used only as a
+join key, so only the validator checks those (a code review found that gap as a working lookup
+oracle, §2.9); a first name alone or a misspelled name isn't a stored value, so it reaches the
+model as typed; the demo tokens are public.
 
 ## Catching regressions
 

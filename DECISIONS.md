@@ -872,7 +872,10 @@ text, the answer cache (keyed by the masked question, so "orders of Tariq" and "
 share one entry and each hit binds its own value), the logs and `feedback.jsonl`.
 **What the other layers do with placeholders:** the validator accepts only the placeholders the
 masker issued (`unknown_placeholder`), rejects one in quotes (`quoted_placeholder`, repairable),
-and reserves `:_user_*` for the requester's attributes (D45). Grounding (D36) checks a
+and reserves `:_user_*` for the requester's attributes (D45); `@name` and `$name`, which
+SQLite binds from the same parameters, are refused outright. For a role that can't read a
+private column (the analyst and customer names), the value is still masked, but the prompt
+doesn't say which column it came from. Grounding (D36) checks a
 placeholder by its column, never its value, and never offers stored values of a private column
 as "did you mean" suggestions: before this, "orders of tariq" could have come back as "did you
 mean 'Tariq Al Thani', 'Tariq Al Otaibi'?", names nobody typed. A question in which the user
@@ -916,7 +919,8 @@ it stands for (`src/mizan/authz.py`). A role lists the tables (and optionally co
 read, columns it can never read, and row filters written with the requester's attributes
 (`country = :_user_country`). Nothing in a request body says who is asking. Without the file
 the server is the single-user local tool it was, as an unrestricted admin.
-**The four layers**, each enough on its own for what it covers, in the spirit of D8:
+**The four layers**, in the spirit of D8. Each covers what it can see; the SQLite layer can't
+see a column used only as a join key, which is why the validator has to (see below):
 1. **Prompt slice.** The model is shown only the role's tables and columns, with the join
    conditions, glossary definitions and worked examples that touch anything hidden removed. (An
    example querying `customers` was still in the prompt for a role without that table; the
@@ -924,14 +928,14 @@ the server is the single-user local tool it was, as an unrestricted admin.
 2. **Validator.** A query reading anything outside the role is `not_authorized`, and that
    rejection is final, like a write (D35): a repair would let anyone probe the hidden schema.
    It fails closed: an unqualified column counts against every referenced table that has it,
-   and `*` against every table it could cover.
+   and `*`, a `NATURAL` join and a `USING` key against every table they could cover.
 3. **Row filters.** After validation, every reference to a filtered table, in a join, subquery,
    CTE or UNION branch, becomes a filtered subquery under the same alias, selecting only the
    columns the role can read. The `:_user_*` values come from the token; the model can't write
    them.
 4. **The SQLite connection.** An authorizer callback refuses every read of a table or column
-   the role can't see, so the limit holds with the other three removed (tested by calling the
-   executor directly). SQLite reports a `SELECT *` as reading every column, which is why layer 3
+   the role can't see, tested by calling the executor directly with the other layers removed.
+   It does not see everything: SQLite reports no read for a column used only to join. SQLite reports a `SELECT *` as reading every column, which is why layer 3
    lists columns; with `*`, a table both filtered and partly hidden refused every query.
 
 One function, `TextToSQL.run_query`, executes every query, fresh or from the cache, so no path
@@ -944,16 +948,34 @@ to the requester it was given to, so follow-ups and feedback can't use someone e
 |---|---|---|
 | `admin` (control) | 1/1 | — |
 | `ksa_manager` (Saudi rows only) | **7/7**, each scored against the Saudi-only answer | — |
-| `courier_ops` (no customers table) | 1/2 | **3/3** / 3/3 |
+| `courier_ops` (no customers table) | 1/2 | **3/3** / 1/3 |
 | `analyst` (no customer names) | 1/1 | **4/4** / 4/4 |
 
 The one miss is a right answer in the wrong shape: the busiest courier, with its count as an
-extra column. The existing 115 eval cases produced identical SQL with authorization in place.
+extra column. Nothing a role can't see came back on any of the 7 denied questions; 5 were
+refused as `not_authorized`. The other two are the cost of keeping repair hints inside the
+role (see below): asked for customers in Dubai and the average order per customer city,
+courier operations got answers about *warehouse* cities, the nearest thing it can see. Safe,
+but an answer to a different question; the "How:" steps under the answer say "warehouse city".
+Before that fix, the hints named `customers.city`, the model reached for it, and all three were
+refused. The existing 115 eval cases produced identical SQL with authorization in place.
+**Found by the code review, before release:** `SELECT COUNT(*) FROM (SELECT 'Tariq Al Thani' AS
+name_en) AS g JOIN customers USING (name_en)` returned 1 for the analyst, and 0 for a name that
+doesn't exist: a lookup oracle on the column the role exists to hide. A `USING` key is an
+identifier, not a column reference, so the validator never checked it; and SQLite's authorizer
+reports no `SQLITE_READ` for it, so the driver layer didn't either. `NATURAL JOIN` had the same
+hole. Join keys now count as reads in the validator. The same review found repair hints naming
+hidden tables (they are now built from the role's slice), a placeholder line naming a hidden
+column (the value stays masked, its column is dropped) and `@name` parameters passing the
+placeholder rule (now refused; SQLite binds them like `:name`). The lesson for the design: the
+layers are independent, not equally complete, and the claim "the driver holds on its own" was
+tested for every read form but one.
 **Known limits:** row filters are enforced by the rewrite only; the SQLite authorizer limits
-tables and columns, not rows. Grounding's "did you mean" hints ignore row filters, so a filtered
+tables and columns, not rows, and doesn't see join-only columns. Grounding's "did you mean" hints ignore row filters, so a filtered
 role could be offered another country's city name. The demo tokens are public, static and never
 expire; there is no rate limiting. A restricted role's prompt is not warmed at startup, so its
 first question pays the cold start. Failing closed can refuse a query a full scope resolver
 would allow.
 **In short:** *"Who is asking decides what the model sees, what the validator accepts, which
-rows the query reads and what SQLite will open, and each of those holds without the others."*
+rows the query reads and what SQLite will open; and each layer's blind spots are written down,
+because one of them was found the hard way."*

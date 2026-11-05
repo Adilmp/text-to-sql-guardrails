@@ -110,13 +110,13 @@
     }
   },
   "rejection_rules": {},
-  "mean_latency_ms": 14739.5,
-  "p50_latency_ms": 10140.0,
-  "p95_latency_ms": 46800.6,
-  "total_seconds": 884.5,
+  "mean_latency_ms": 12939.7,
+  "p50_latency_ms": 10180.3,
+  "p95_latency_ms": 27918.2,
+  "total_seconds": 776.5,
   "correct_relaxed": 51,
   "accuracy_relaxed": 0.85,
   "repaired": 1,
   "repaired_correct": 0,
-  "warmup_ms": 1659.8
+  "warmup_ms": 252575.1
 }
