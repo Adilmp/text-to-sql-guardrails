@@ -39,13 +39,13 @@
     "function_not_allowed": 1,
     "unknown_table": 1
   },
-  "mean_latency_ms": 17309.9,
-  "p50_latency_ms": 5999.6,
-  "p95_latency_ms": 68440.1,
-  "total_seconds": 121.2,
+  "mean_latency_ms": 33855.4,
+  "p50_latency_ms": 9445.0,
+  "p95_latency_ms": 156978.8,
+  "total_seconds": 237.0,
   "correct_relaxed": null,
   "accuracy_relaxed": null,
   "repaired": 2,
   "repaired_correct": 2,
-  "warmup_ms": 1284.2
+  "warmup_ms": 1847.2
 }

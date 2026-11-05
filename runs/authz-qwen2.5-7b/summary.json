@@ -1,0 +1,77 @@
+{
+  "model": "qwen2.5:7b",
+  "provider": "ollama",
+  "suite": "authz",
+  "n": 18,
+  "correct": 17,
+  "accuracy": 0.9444,
+  "blocked": 7,
+  "executed": 11,
+  "by_language": {
+    "en": {
+      "n": 13,
+      "correct": 12
+    },
+    "ar": {
+      "n": 3,
+      "correct": 3
+    },
+    "ur": {
+      "n": 2,
+      "correct": 2
+    }
+  },
+  "by_difficulty": {
+    "easy": {
+      "n": 13,
+      "correct": 13
+    },
+    "medium": {
+      "n": 5,
+      "correct": 4
+    }
+  },
+  "by_tag": {
+    "role": {
+      "n": 18,
+      "correct": 17
+    },
+    "admin": {
+      "n": 1,
+      "correct": 1
+    },
+    "allowed": {
+      "n": 11,
+      "correct": 10
+    },
+    "analyst": {
+      "n": 5,
+      "correct": 5
+    },
+    "denied": {
+      "n": 7,
+      "correct": 7
+    },
+    "courier_ops": {
+      "n": 5,
+      "correct": 4
+    },
+    "ksa_manager": {
+      "n": 7,
+      "correct": 7
+    }
+  },
+  "rejection_rules": {
+    "not_authorized": 12,
+    "unknown_alias": 1
+  },
+  "mean_latency_ms": 17147.8,
+  "p50_latency_ms": 4956.3,
+  "p95_latency_ms": 172978.5,
+  "total_seconds": 537.4,
+  "correct_relaxed": 11,
+  "accuracy_relaxed": 0.6111,
+  "repaired": 2,
+  "repaired_correct": 2,
+  "warmup_ms": 1296.5
+}
