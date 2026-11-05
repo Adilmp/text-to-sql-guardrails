@@ -48,6 +48,8 @@ Each one ends with **In short**: the decision and its reason in one line.
 | D41 | Answers are presented for people: a sentence from the result, a chart, CSV, suggestions | Serving |
 | D42 | Features follow research on what users of these tools need, and stay minimal | Serving |
 | D43 | Follow-ups carry the earlier exchange; clarifying questions come from a curated list | Accuracy |
+| D44 | Private values reach the model as typed placeholders and the database as bound parameters | Privacy |
+| D45 | A role limits tables, columns and rows in four independent layers | Safety |
 
 ---
 
@@ -848,3 +850,110 @@ UAE") sometimes lose what was being measured, and "and how many customers are in
 merged into the earlier query instead of replacing it.
 **In short:** *"Carry the conversation without changing a single standalone answer, and ask
 only where the data really has two meanings."*
+
+
+## D44: Private values reach the model as typed placeholders and the database as bound parameters
+**Decision:** before a question reaches the model, every stored value of a column listed in
+`<db>.privacy.json` (customer names, in English and in Arabic script) and every email,
+international phone number (+92, +96x, +97x), CNIC or Emirates ID number in it is replaced by a
+typed placeholder. "How many orders did Tariq Al Thani place?" is sent as "How many orders did
+`:customer_name_1` place?", with one line saying that `:customer_name_1` is a value of
+`customers.name_en`. The model writes `WHERE c.name_en = :customer_name_1`, and the executor
+binds the real value as a SQLite parameter (`src/mizan/privacy.py`).
+**Why a list of stored values, not a name-recognition model:** a list cannot miss a value it
+holds, costs nothing, and works the same in Urdu, where recognisers are weakest. Matching runs
+on `normalize_for_matching` keys (D5), so a name typed without the madda or with Urdu letters is
+still found, and the binding carries the stored spelling, so the comparison matches.
+**Why bound parameters, not putting the value back into the SQL:** a bound value is never part
+of the statement, so it can't change what the statement does (`x' OR '1'='1` binds as text and
+matches nothing; tested). And the SQL that is shown, cached and logged holds only placeholders.
+**Where the value never goes:** any prompt (including follow-ups and repair hints), the SQL
+text, the answer cache (keyed by the masked question, so "orders of Tariq" and "orders of Omar"
+share one entry and each hit binds its own value), the logs and `feedback.jsonl`.
+**What the other layers do with placeholders:** the validator accepts only the placeholders the
+masker issued (`unknown_placeholder`), rejects one in quotes (`quoted_placeholder`, repairable),
+and reserves `:_user_*` for the requester's attributes (D45). Grounding (D36) checks a
+placeholder by its column, never its value, and never offers stored values of a private column
+as "did you mean" suggestions: before this, "orders of tariq" could have come back as "did you
+mean 'Tariq Al Thani', 'Tariq Al Otaibi'?", names nobody typed. A question in which the user
+typed placeholder-like text skips the cache, so it can't read or overwrite someone else's entry.
+**Measured** (`qwen2.5:7b`, `runs/privacy-*` and `runs/privacy_plain-*`, the same 24 questions):
+
+| | With masking | Without masking |
+|---|---|---|
+| Strict | **19/24 (79.2%)** | 19/24 (79.2%) |
+| English / Arabic / Urdu (of 8) | 7 / 7 / 5 | 7 / 5 / 7 |
+| Cases in which a customer name reached the model | **0/24** | 24/24 |
+| Existing suites (115 cases) with masking in place | identical SQL on every case | |
+
+The per-language split is a trade, not a gain: masking won two Arabic cases and lost two Urdu
+ones. One of the Arabic wins is a failure masking removes by construction: without it, the
+model turned هدى القاسمي into an invented English name ("Bilal Al Qassimi") and answered for
+nobody. The weak spot with masking is the question naming two people, which the model got
+wrong in two of three languages.
+**Found by measuring, not by reviewing:**
+- **A possessive defeated the masker.** "Hessa Al Harbi's orders" kept the apostrophe inside the
+  last word, so the name didn't match and went to the model; every masker unit test had missed it. The
+  eval's leak count caught it on the first mock run. A trailing `'s` is now matched and kept.
+- **The model quoted the placeholder's name without its colon** (`= 'customer_name_1'`). It
+  ran and matched nothing, silently. It is now `quoted_placeholder` and goes to repair, which
+  took the masked suite from 16/24 to 19/24.
+- **The leak test was too weak at first.** Planting each leak it guards against (masking off,
+  the question logged, grounding suggesting private values) showed that the third went
+  undetected; a misspelled name is what triggers it, and the test now uses one.
+
+**Known limits:** only whole stored values are masked. A first name alone ("Tariq") or a
+misspelled name isn't a stored value, so it reaches the model as typed; what never reaches it is
+the stored name. Only the columns listed in the file are private. Masking protects what is sent
+to the model, not the answer shown to the person who asked.
+**In short:** *"The model writes the query against a placeholder; only the database ever sees
+the value."*
+
+## D45: A role limits tables, columns and rows in four independent layers
+**Decision:** with `<db>.roles.json` beside the database, every data endpoint needs
+`Authorization: Bearer <token>`; the file holds each token's SHA-256 and the role and attributes
+it stands for (`src/mizan/authz.py`). A role lists the tables (and optionally columns) it can
+read, columns it can never read, and row filters written with the requester's attributes
+(`country = :_user_country`). Nothing in a request body says who is asking. Without the file
+the server is the single-user local tool it was, as an unrestricted admin.
+**The four layers**, each enough on its own for what it covers, in the spirit of D8:
+1. **Prompt slice.** The model is shown only the role's tables and columns, with the join
+   conditions, glossary definitions and worked examples that touch anything hidden removed. (An
+   example querying `customers` was still in the prompt for a role without that table; the
+   prompt-slice test caught it.)
+2. **Validator.** A query reading anything outside the role is `not_authorized`, and that
+   rejection is final, like a write (D35): a repair would let anyone probe the hidden schema.
+   It fails closed: an unqualified column counts against every referenced table that has it,
+   and `*` against every table it could cover.
+3. **Row filters.** After validation, every reference to a filtered table, in a join, subquery,
+   CTE or UNION branch, becomes a filtered subquery under the same alias, selecting only the
+   columns the role can read. The `:_user_*` values come from the token; the model can't write
+   them.
+4. **The SQLite connection.** An authorizer callback refuses every read of a table or column
+   the role can't see, so the limit holds with the other three removed (tested by calling the
+   executor directly). SQLite reports a `SELECT *` as reading every column, which is why layer 3
+   lists columns; with `*`, a table both filtered and partly hidden refused every query.
+
+One function, `TextToSQL.run_query`, executes every query, fresh or from the cache, so no path
+skips a layer. Each restricted role has its own engine and cache context; an answer id belongs
+to the requester it was given to, so follow-ups and feedback can't use someone else's answer;
+`/api/schema` returns the role's slice; `feedback.jsonl` records the role.
+**Measured** (`qwen2.5:7b`, `runs/authz-*`, 18 questions asked as the four demo roles):
+
+| Role | Allowed questions right | Denied questions: nothing leaked / refused |
+|---|---|---|
+| `admin` (control) | 1/1 | — |
+| `ksa_manager` (Saudi rows only) | **7/7**, each scored against the Saudi-only answer | — |
+| `courier_ops` (no customers table) | 1/2 | **3/3** / 3/3 |
+| `analyst` (no customer names) | 1/1 | **4/4** / 4/4 |
+
+The one miss is a right answer in the wrong shape: the busiest courier, with its count as an
+extra column. The existing 115 eval cases produced identical SQL with authorization in place.
+**Known limits:** row filters are enforced by the rewrite only; the SQLite authorizer limits
+tables and columns, not rows. Grounding's "did you mean" hints ignore row filters, so a filtered
+role could be offered another country's city name. The demo tokens are public, static and never
+expire; there is no rate limiting. A restricted role's prompt is not warmed at startup, so its
+first question pays the cold start. Failing closed can refuse a query a full scope resolver
+would allow.
+**In short:** *"Who is asking decides what the model sees, what the validator accepts, which
+rows the query reads and what SQLite will open, and each of those holds without the others."*
