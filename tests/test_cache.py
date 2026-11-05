@@ -273,3 +273,157 @@ class TestStatus:
         assert cache.status("c", "k") == ("SELECT 1", -1)
         cache.put("c", "k", "q", "SELECT 2", 1.0)  # a different answer replaces the report
         assert cache.status("c", "k") == ("SELECT 2", 0)
+
+
+# --------------------------------------------------------------------- private values
+
+SENSITIVE = {"customers.name_en": "customer_name", "customers.name_ar": "customer_name_ar"}
+BY_NAME = (
+    "SELECT COUNT(*) FROM orders o JOIN customers c ON c.customer_id = o.customer_id "
+    "WHERE c.name_en = :customer_name_1"
+)
+
+
+def _orders_of(db: Path, name: str) -> int:
+    import sqlite3
+
+    with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
+        (n,) = conn.execute(BY_NAME.replace(":customer_name_1", "?"), (name,)).fetchone()
+    return int(n)
+
+
+def masked_front(
+    catalog: Catalog, settings: Settings, tmp_path: Path, db_path: Path, *script: str
+) -> tuple[CachedTextToSQL, MockProvider]:
+    from mizan.privacy import Masker
+
+    provider = MockProvider(script=list(script))
+    engine = TextToSQL(catalog, provider, settings, masker=Masker.from_db(db_path, SENSITIVE))
+    front = CachedTextToSQL(engine, AnswerCache(tmp_path / "c.sqlite"), CacheSettings())
+    return front, provider
+
+
+class TestMaskedCache:
+    """The cache is keyed by the masked question and stores placeholders, never names."""
+
+    def test_two_customers_share_one_entry_and_each_gets_their_own_answer(
+        self, catalog: Catalog, settings: Settings, tmp_path: Path, db_path: Path
+    ) -> None:
+        front, provider = masked_front(catalog, settings, tmp_path, db_path, BY_NAME)
+        first, hit = front.ask("how many orders did Tariq Al Thani place?")
+        assert hit is None and first.ok
+        second, hit = front.ask("How many orders did Omar Al Thani place?")
+        assert hit is not None, "the masked question should match the cached entry"
+        assert len(provider.calls) == 1
+        assert second.result is not None
+        assert second.result.rows == ((_orders_of(db_path, "Omar Al Thani"),),)
+        assert second.bindings["customer_name_1"].value == "Omar Al Thani"
+        assert ":customer_name_1" in hit.question
+
+    def test_the_cache_file_holds_no_names(
+        self, catalog: Catalog, settings: Settings, tmp_path: Path, db_path: Path
+    ) -> None:
+        front, _ = masked_front(catalog, settings, tmp_path, db_path, BY_NAME)
+        front.ask("how many orders did Tariq Al Thani place?")
+        front.verdict("how many orders did Tariq Al Thani place?", BY_NAME, up=True)
+        front.cache.close()  # type: ignore[union-attr]
+        stored = (tmp_path / "c.sqlite").read_bytes()
+        assert b"Tariq" not in stored and "طارق".encode() not in stored
+
+    def test_a_verdict_applies_to_the_masked_question(
+        self, catalog: Catalog, settings: Settings, tmp_path: Path, db_path: Path
+    ) -> None:
+        front, provider = masked_front(catalog, settings, tmp_path, db_path, BY_NAME, BY_NAME)
+        front.ask("how many orders did Tariq Al Thani place?")
+        front.verdict("how many orders did Tariq Al Thani place?", BY_NAME, up=False)
+        assert front.reported("how many orders did Omar Al Thani place?", BY_NAME)
+        _, hit = front.ask("how many orders did Omar Al Thani place?")
+        assert hit is None and len(provider.calls) == 2  # reported: back to the model
+
+    def test_a_typed_placeholder_neither_reads_nor_writes_the_cache(
+        self, catalog: Catalog, settings: Settings, tmp_path: Path, db_path: Path
+    ) -> None:
+        # Typing ":customer_name_1" must not reach someone else's entry: no hit, no
+        # eviction of the real entry, and no answer stored under the shared key.
+        front, provider = masked_front(
+            catalog, settings, tmp_path, db_path, BY_NAME, "SELECT COUNT(*) FROM orders"
+        )
+        front.ask("how many orders did Tariq Al Thani place?")
+        _, hit = front.ask("how many orders did :customer_name_1 place?")
+        assert hit is None and len(provider.calls) == 2
+        assert front.cache is not None and front.cache.count(front.context) == 1
+        again, hit = front.ask("how many orders did Omar Al Thani place?")
+        assert hit is not None and again.result is not None
+        assert again.result.rows == ((_orders_of(db_path, "Omar Al Thani"),),)
+
+    def test_without_a_masker_keys_are_unchanged(
+        self, catalog: Catalog, settings: Settings, tmp_path: Path
+    ) -> None:
+        front, _ = served(catalog, settings, tmp_path, LATE)
+        front.ask("How many orders were delivered late?")
+        assert front.cache is not None
+        assert front.cache.has(
+            front.context, canonical_question("how many orders were delivered late")
+        )
+
+
+class TestMaskedApi:
+    """The server builds a masker when <db>.privacy.json sits next to the database."""
+
+    @pytest.fixture()
+    def scripted(
+        self, db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> Iterator[tuple[TestClient, MockProvider, Path]]:
+        import json
+        import shutil
+
+        db = tmp_path / "shop.sqlite"
+        shutil.copy(db_path, db)
+        (tmp_path / "shop.privacy.json").write_text(
+            json.dumps({"sensitive_columns": SENSITIVE}), encoding="utf-8"
+        )
+        provider = MockProvider(script=[BY_NAME] * 4)
+        monkeypatch.setattr("mizan.api.build_provider", lambda _cfg: provider)
+        settings = Settings.from_env(provider="mock", db_path=db, log_dir=tmp_path / "logs")
+        app = create_app(settings, CacheSettings(path=tmp_path / "c.sqlite"))
+        with TestClient(app) as client:
+            yield client, provider, tmp_path
+
+    def test_the_model_never_sees_the_name(
+        self, scripted: tuple[TestClient, MockProvider, Path], db_path: Path
+    ) -> None:
+        client, provider, _ = scripted
+        body = client.post(
+            "/api/ask", json={"question": "how many orders did Tariq Al Thani place?"}
+        ).json()
+        assert body["ok"] is True
+        assert body["result"]["rows"] == [[_orders_of(db_path, "Tariq Al Thani")]]
+        assert ":customer_name_1" in body["sql"]
+        assert all(
+            "Tariq" not in call.user and "Tariq" not in call.system for call in provider.calls
+        )
+
+    def test_several_samples_are_masked_too(
+        self, scripted: tuple[TestClient, MockProvider, Path]
+    ) -> None:
+        client, provider, _ = scripted
+        body = client.post(
+            "/api/ask",
+            json={"question": "how many orders did Tariq Al Thani place?", "samples": 2},
+        ).json()
+        assert body["ok"] is True
+        assert all("Tariq" not in call.user for call in provider.calls)
+
+    def test_feedback_logs_the_masked_question(
+        self, scripted: tuple[TestClient, MockProvider, Path]
+    ) -> None:
+        import json
+
+        client, _, tmp = scripted
+        first = client.post(
+            "/api/ask", json={"question": "how many orders did Tariq Al Thani place?"}
+        ).json()
+        client.post("/api/feedback", json={"answer_id": first["answer_id"], "verdict": "down"})
+        last = json.loads((tmp / "logs" / "feedback.jsonl").read_text("utf-8").splitlines()[-1])
+        assert last["question"] == "how many orders did :customer_name_1 place?"
+        assert "Tariq" not in json.dumps(last, ensure_ascii=False)
