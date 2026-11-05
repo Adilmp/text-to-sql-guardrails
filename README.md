@@ -158,6 +158,12 @@ every number, per language, per tag and per failure, generated from the run file
 - **The answer first, in their language**, as one line built from the result (never written by
   the model, so it can't misstate a number): "188 orders were delivered late.",
   "عدد الطلبات المتأخرة في دبي: 20", "295 آرڈر ابھی تک ڈیلیور نہیں ہوئے۔"
+- **Proof under every answer**, as small chips: *Checked before running*, *1 private value
+  hidden from the AI*, *Saudi Arabia's rows only*, *Instant, from the cache*, and a warning only
+  when the answer's weakest signal is actually weak.
+- **A blocked attack says what it would have done** ("That would have changed or deleted data.
+  Nothing ran, and your data is untouched."), and a question outside a role is refused in plain
+  words, with the technical reason folded underneath.
 - **How it was answered, in plain steps**, so someone who doesn't read SQL can check it:
   "counted orders · with customers · only late orders · city = 'Dubai'" (also in Arabic and Urdu).
 - **👍 / 👎.** A confirmed answer becomes *verified* and is suggested first; a reported one is
@@ -165,7 +171,9 @@ every number, per language, per tag and per failure, generated from the run file
 - **A chart** when the result is a label and a number: bars, or a line for months and years.
 - **Download CSV / Copy / Share** (the phone's share sheet, so WhatsApp), with the byte-order
   mark Excel needs for Arabic and Urdu, and cells that look like formulas defused.
-- **"What can I ask?"**: the data available, with its Arabic and Urdu names.
+- **A start, not a blank box**: example questions grouped by topic in all three languages, a
+  "Try to break it" group, and "What's in the data?" (the tables the current role can see, with
+  their Arabic and Urdu names).
 - **Follow-up questions.** After an answer, "and in Riyadh?" or "only for 2025" is read against
   the question before it; one click starts a new question instead. 19/24 on a follow-up suite
   in three languages, and adding it left every standalone answer byte-identical
@@ -174,8 +182,12 @@ every number, per language, per tag and per failure, generated from the run file
   should count? All orders / Only delivered ones"* in the question's language, before any model
   call. A short curated list of genuinely ambiguous terms decides, not the model.
 - **Suggestions as they type**, from a curated list (never other people's questions), cached
-  ones first and marked ⚡ *instant*.
-- Then, one click away, the evidence: the SQL, any guardrail notes, and the confidence signals.
+  ones first and marked *instant*.
+- **A conversation, keyboard-first**: answers stack as a thread with the question box at the
+  bottom; `/` jumps to it, `↑` edits the last question, `Esc` clears. The page is one file with
+  its fonts (IBM Plex Sans and Plex Sans Arabic) served by the app, light and dark.
+- Then, one click away ("How this was worked out"), the evidence: the SQL, the placeholders
+  the model saw, any guardrail notes, and the confidence signals.
 
 Each of these answers a documented need of people using natural-language data tools: trust
 through visible steps, verified answers, knowing what can be asked, sharing where work happens
