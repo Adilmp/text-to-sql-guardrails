@@ -115,7 +115,9 @@ class Masker:
         # before "Omar Al Thani". The first stored spelling of a key wins.
         index: dict[str, list[tuple[tuple[str, ...], SensitiveValue]]] = {}
         seen: set[tuple[str, tuple[str, ...]]] = set()
+        values_seen: list[SensitiveValue] = []
         for entry in values:
+            values_seen.append(entry)
             keys = tuple(_key(m.group()) for m in _WORD_RE.finditer(entry.value))
             if not keys or (entry.prefix, keys) in seen:
                 continue
@@ -124,6 +126,9 @@ class Masker:
         for candidates in index.values():
             candidates.sort(key=lambda item: len(item[0]), reverse=True)
         self._index = index
+        #: ``(table, column)`` for every column values were loaded from. Grounding never
+        #: offers stored values of these columns to the model as suggestions.
+        self.sensitive_columns = frozenset({(v.table, v.column) for v in values_seen})
 
     @classmethod
     def from_db(cls, db_path: Path, sensitive_columns: Mapping[str, str]) -> Masker:
@@ -147,8 +152,13 @@ class Masker:
                         values.append(SensitiveValue(text, table, column, prefix))
         return cls(values)
 
-    def mask(self, text: str) -> Masked:
-        """Replace every private value in ``text`` (``clean_for_model`` output)."""
+    def mask(self, text: str, known: Mapping[str, Binding] | None = None) -> Masked:
+        """Replace every private value in ``text`` (``clean_for_model`` output).
+
+        ``known`` holds placeholders issued earlier in the same conversation: a value seen
+        before keeps its name, and a new one is numbered after them, so a follow-up's SQL
+        can use both. ``bindings`` holds only the placeholders that occur in ``text``.
+        """
         hits: list[tuple[int, int, str, Binding]] = []
         for prefix, pattern in _SHAPES:
             for m in pattern.finditer(text):
@@ -169,7 +179,7 @@ class Masker:
 
         if not hits:
             return Masked(text)
-        return _replace(text, sorted(hits, key=lambda hit: hit[0]))
+        return _replace(text, sorted(hits, key=lambda hit: hit[0]), known or {})
 
     def _match_at(
         self, text: str, words: list[re.Match[str]], i: int
@@ -193,17 +203,21 @@ def _overlaps(hits: list[tuple[int, int, str, Binding]], start: int, end: int) -
     return any(start < h_end and h_start < end for h_start, h_end, _, _ in hits)
 
 
-def _replace(text: str, hits: list[tuple[int, int, str, Binding]]) -> Masked:
+def _replace(
+    text: str, hits: list[tuple[int, int, str, Binding]], known: Mapping[str, Binding]
+) -> Masked:
     """Rebuild the text with numbered placeholders, one name per distinct value."""
-    taken = {m.group(1) for m in _TYPED_PLACEHOLDER_RE.finditer(text)}
+    taken = {m.group(1) for m in _TYPED_PLACEHOLDER_RE.finditer(text)} | set(known)
     counters: dict[str, int] = {}
-    names: dict[tuple[str, Binding], str] = {}
+    names = {(name.rpartition("_")[0], binding): name for name, binding in known.items()}
     bindings: dict[str, Binding] = {}
     parts: list[str] = []
     cursor = 0
     for start, end, prefix, binding in hits:
         name = names.get((prefix, binding))
-        if name is None:
+        if name is not None:
+            bindings.setdefault(name, binding)
+        else:
             n = counters.get(prefix, 0)
             while True:
                 n += 1

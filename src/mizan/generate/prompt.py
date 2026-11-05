@@ -33,8 +33,14 @@ What is in it, and why each part earned its place
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
+
 from ..nl.detect import Script
 from ..schema.catalog import Catalog
+
+if TYPE_CHECKING:
+    from ..privacy import Binding
 
 _RULES = """\
 You translate a question about the database below into exactly one SQLite SELECT statement.
@@ -129,8 +135,19 @@ def build_system_prompt(
     return "\n".join(parts)
 
 
-def build_user_prompt(question: str, script: Script | None = None) -> str:
+def build_user_prompt(
+    question: str,
+    script: Script | None = None,
+    *,
+    bindings: Mapping[str, Binding] | None = None,
+) -> str:
     """Wrap the question itself.
+
+    ``bindings`` are the placeholders that replaced private values in the question
+    (privacy.py). Each gets one line saying what it stands for, never its value, so the
+    model writes ``c.name_en = :customer_name_1`` and the value is bound when the query runs.
+    With none, the prompt is exactly what it has always been, so the system prompt and every
+    eval case are unchanged.
 
     The trailing ``SQL:`` cue matters: it puts the model in completion position, which
     measurably reduces the rate of conversational preambles like "Sure, here's the query".
@@ -138,4 +155,19 @@ def build_user_prompt(question: str, script: Script | None = None) -> str:
     them. The label is English for every language, matching the examples.
     """
     del script
-    return f"Question: {question}\nSQL:"
+    if not bindings:
+        return f"Question: {question}\nSQL:"
+    lines = [f"Question: {question}", "Private values in the question are placeholders:"]
+    for name, binding in bindings.items():
+        what = (
+            f"a value of {binding.table}.{binding.column}"
+            if binding.table and binding.column
+            else "a private value with no column in the schema"
+        )
+        lines.append(f"  :{name} is {what}")
+    lines += [
+        "Write each placeholder in the SQL exactly as shown, unquoted (= :name, not ':name').",
+        "Never guess the value behind a placeholder.",
+        "SQL:",
+    ]
+    return "\n".join(lines)

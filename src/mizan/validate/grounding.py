@@ -28,8 +28,10 @@ from the model's query is quoted by the SQL generator, never pasted into a strin
 from __future__ import annotations
 
 import difflib
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlglot import exp
 
@@ -39,6 +41,9 @@ from ..guardrails.validator import DIALECT, parse_sql
 from ..logging import get_logger
 from ..nl.normalize import arabic_ratio, normalize_for_matching
 from ..schema.catalog import Catalog, is_prompt_safe
+
+if TYPE_CHECKING:
+    from ..privacy import Binding
 
 logger = get_logger("grounding")
 
@@ -59,21 +64,41 @@ class GroundingIssue:
     #: Stored values the model probably meant, closest first. Empty only for an
     #: Arabic-script value whose column has no short value list to offer.
     suggestions: tuple[str, ...]
+    #: For a placeholder (``value`` is then ``:customer_name_1``, never the real value):
+    #: the ``table.column`` it belongs to, when the query compared it with another column.
+    expected: str | None = None
 
     def __str__(self) -> str:
         where = f"{self.table}.{self.column}"
+        if self.expected:
+            return (
+                f"{self.value} is a value of {self.expected}, not {where}; "
+                f"compare {self.expected} with it"
+            )
         if self.suggestions:
             options = ", ".join(repr(s) for s in self.suggestions)
             return f"no row has {where} = {self.value!r}; the stored values include {options}"
         return f"no row has {where} = {self.value!r}; stored values are in English"
 
 
-def check_values(sql: str, catalog: Catalog, db_path: Path) -> list[GroundingIssue]:
+def check_values(
+    sql: str,
+    catalog: Catalog,
+    db_path: Path,
+    *,
+    bindings: Mapping[str, Binding] | None = None,
+    sensitive: Collection[tuple[str, str]] = (),
+) -> list[GroundingIssue]:
     """Text values in ``sql`` that don't occur in their column but probably meant one that does.
 
     ``sql`` is expected to have passed validation already. Anything that can't be checked
     (unparseable, a column that can't be resolved to one table, a lookup that fails) is
     skipped: this is a hint for the repair loop, and a missing hint is harmless.
+
+    Placeholders (privacy.py) are checked by column, never by value: a placeholder compared
+    with the column its value came from is grounded by construction, and one compared with
+    any other column is reported by name. ``sensitive`` columns are never looked up, because
+    the suggestions would send stored private values (other customers' names) to the model.
     """
     try:
         tree = parse_sql(sql)
@@ -83,11 +108,19 @@ def check_values(sql: str, catalog: Catalog, db_path: Path) -> list[GroundingIss
     aliases = _aliases(tree, catalog)
     issues: list[GroundingIssue] = []
     seen: set[tuple[str, str, str]] = set()
+    for column, name in _placeholder_comparisons(tree):
+        binding = (bindings or {}).get(name)
+        resolved = _resolve(column, aliases, catalog)
+        if binding is None or binding.column is None or resolved is None:
+            continue
+        expected = f"{binding.table}.{binding.column}"
+        if resolved != (binding.table, binding.column):
+            issues.append(GroundingIssue(*resolved, f":{name}", (), expected=expected))
     for column, value in _comparisons(tree):
         if len(seen) >= _MAX_LOOKUPS:
             break
         resolved = _resolve(column, aliases, catalog)
-        if resolved is None:
+        if resolved is None or resolved in sensitive:
             continue
         table, col = resolved
         key = (table, col, value)
@@ -125,6 +158,25 @@ def _comparisons(tree: exp.Expression) -> list[tuple[exp.Column, str]]:
     for in_node in tree.find_all(exp.In):
         if isinstance(in_node.this, exp.Column):
             pairs += [(in_node.this, e.name) for e in in_node.expressions if _is_text(e)]
+    return pairs
+
+
+def _placeholder_comparisons(tree: exp.Expression) -> list[tuple[exp.Column, str]]:
+    """``(column, placeholder name)`` for every equality and IN-list against a placeholder."""
+    pairs: list[tuple[exp.Column, str]] = []
+    for node in tree.find_all(exp.EQ):
+        left, right = node.this, node.expression
+        if isinstance(left, exp.Column) and isinstance(right, exp.Placeholder):
+            pairs.append((left, right.name))
+        elif isinstance(right, exp.Column) and isinstance(left, exp.Placeholder):
+            pairs.append((right, left.name))
+    for in_node in tree.find_all(exp.In):
+        if isinstance(in_node.this, exp.Column):
+            pairs += [
+                (in_node.this, e.name)
+                for e in in_node.expressions
+                if isinstance(e, exp.Placeholder)
+            ]
     return pairs
 
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -125,8 +126,12 @@ def execute(
     *,
     max_rows: int = 200,
     timeout_s: float = 5.0,
+    params: Mapping[str, str] | None = None,
 ) -> QueryResult:
     """Run ``sql`` read-only against ``db_path``.
+
+    ``params`` binds named placeholders (``:customer_name_1``) as SQLite parameters: the
+    values are never part of the SQL text, so they can't change what the statement does.
 
     Raises :class:`QueryTimeout` if the deadline elapses and :class:`ExecutionError` for
     any other database failure.
@@ -169,7 +174,7 @@ def execute(
             with suppress(AttributeError, sqlite3.Error, ValueError):
                 conn.setlimit(length_limit_id, _SQLITE_LENGTH_LIMIT)
 
-        cursor = conn.execute(sql)
+        cursor = conn.execute(sql, dict(params or {}))
         columns = tuple(d[0] for d in (cursor.description or ()))
         fetched = cursor.fetchmany(max_rows + 1)
         truncated = len(fetched) > max_rows

@@ -118,6 +118,13 @@ def _violation_hint(rule: str, detail: str, catalog: Catalog) -> str:
         )
     if rule == "parse_error":
         return f"It is not a single valid SQLite statement ({detail})."
+    if rule == "unknown_placeholder":
+        return f"{detail}. Use only those, exactly as written."
+    if rule == "quoted_placeholder":
+        return (
+            f"{detail}: write the placeholder without quotes (= :name, not ':name'). "
+            "Its value is filled in when the query runs."
+        )
     return f"{rule}: {detail}"
 
 
