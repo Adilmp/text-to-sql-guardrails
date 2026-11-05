@@ -21,6 +21,7 @@ from .errors import MizanError
 from .eval import SUITES, get_suite, run_suite
 from .generate import TextToSQL
 from .logging import configure, get_logger
+from .privacy import load_masker
 from .providers import build_provider
 from .schema import load_catalog
 
@@ -118,7 +119,9 @@ def cmd_ask(
 
     try:
         catalog = load_catalog(settings.db_path)
-        engine = TextToSQL(catalog, build_provider(settings), settings)
+        engine = TextToSQL(
+            catalog, build_provider(settings), settings, masker=load_masker(settings.db_path)
+        )
         answer = engine.ask(question)
     except MizanError as exc:
         console.print(f"[red]error:[/red] {exc}")

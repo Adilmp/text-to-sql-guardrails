@@ -50,6 +50,7 @@ from mizan.cache import (  # noqa: E402
 from mizan.config import Settings  # noqa: E402
 from mizan.generate import TextToSQL  # noqa: E402
 from mizan.logging import configure  # noqa: E402
+from mizan.privacy import load_masker  # noqa: E402
 from mizan.providers import build_provider  # noqa: E402
 from mizan.questions import curated_questions, names_from_db  # noqa: E402
 from mizan.schema import load_catalog  # noqa: E402
@@ -94,7 +95,10 @@ def main() -> int:
         print("MIZAN_CACHE is off: nothing to pre-fill", file=sys.stderr)
         return 1
     catalog = load_catalog(settings.db_path)
-    engine = TextToSQL(catalog, build_provider(settings), settings)
+    # The same masker the server uses, so pre-filled entries have the server's keys.
+    engine = TextToSQL(
+        catalog, build_provider(settings), settings, masker=load_masker(settings.db_path)
+    )
     cache = AnswerCache(cache_settings.path)
     served = CachedTextToSQL(engine, cache, cache_settings)
 

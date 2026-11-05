@@ -40,6 +40,7 @@ from .generate import TextToSQL
 from .logging import configure, get_logger, run_context
 from .nl import detect_script
 from .present import chart_spec, explain, summarize
+from .privacy import load_masker
 from .providers import build_provider
 from .questions import Suggester, curated_questions, names_from_db
 from .schema import load_catalog
@@ -168,7 +169,12 @@ def create_app(
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         state["catalog"] = load_catalog(cfg.db_path)
         state["provider"] = build_provider(cfg)
-        state["engine"] = TextToSQL(state["catalog"], state["provider"], cfg)
+        # Private values (<db>.privacy.json beside the database) are masked before the model
+        # sees a question; without the file, questions go to the model as typed.
+        state["masker"] = load_masker(cfg.db_path)
+        state["engine"] = TextToSQL(
+            state["catalog"], state["provider"], cfg, masker=state["masker"]
+        )
         cache = AnswerCache(cache_settings.path) if cache_settings.enabled else None
         state["cache"] = cache
         state["served"] = CachedTextToSQL(state["engine"], cache, cache_settings)
@@ -264,12 +270,15 @@ def create_app(
             raise HTTPException(status_code=404, detail="unknown or expired answer id")
         question, sql, _ = entry
         served: CachedTextToSQL = state["served"]
+        masked = state["engine"].mask_question(question)
         up = request.verdict == "up"
         served.verdict(question, sql, up)
         record = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "verdict": request.verdict,
-            "question": question,
+            # As the model saw it when it held private values: a feedback log is a copy of
+            # the question, and private values stay out of copies.
+            "question": masked.text if masked.bindings else question,
             "sql": sql,
             "model": state["provider"].model,
         }
@@ -366,6 +375,7 @@ def create_app(
                         state["catalog"],
                         state["provider"],
                         cfg.model_copy(update={"self_consistency_n": request.samples}),
+                        masker=state["masker"],
                     )
                     answer = engine.ask(question, context)
                 else:

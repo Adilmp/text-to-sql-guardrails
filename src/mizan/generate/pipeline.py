@@ -68,7 +68,7 @@ from ..guardrails import (
 from ..logging import get_logger
 from ..nl.detect import Script, detect_script
 from ..nl.normalize import clean_for_model
-from ..privacy import Binding, Masker
+from ..privacy import Binding, Masked, Masker
 from ..providers.base import Provider, Turn
 from ..schema.catalog import Catalog
 from ..validate.confidence import Confidence, rejected, score_answer
@@ -321,6 +321,11 @@ class TextToSQL:
         )
 
     # ------------------------------------------------------------------ internals
+
+    def mask_question(self, question: str) -> Masked:
+        """``question`` as the model would see it: cleaned, private values masked."""
+        text, bindings = self._mask(clean_for_model(question), {})
+        return Masked(text, bindings)
 
     def _mask(self, text: str, known: dict[str, Binding]) -> tuple[str, dict[str, Binding]]:
         if self.masker is None:
