@@ -32,7 +32,7 @@ from __future__ import annotations
 import re
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import sqlglot
 from sqlglot import exp
@@ -43,6 +43,9 @@ from ..nl.normalize import normalize_for_matching
 from ..schema.catalog import Catalog
 from .extract import find_stacked_statement, has_multiple_statements
 from .policy import GuardrailPolicy
+
+if TYPE_CHECKING:
+    from ..authz import RolePolicy
 
 logger = get_logger("guardrails")
 
@@ -167,6 +170,7 @@ def validate(
     *,
     raw_output: str | None = None,
     placeholders: Collection[str] | None = None,
+    role: RolePolicy | None = None,
 ) -> GuardrailReport:
     """Validate ``sql`` against ``policy`` and (optionally) a real schema ``catalog``.
 
@@ -176,6 +180,9 @@ def validate(
     ``placeholders`` are the names (without the colon) the masker issued for this question
     (privacy.py). Any other parameter in the query is rejected, so the model can't reach a
     value it wasn't given, including the requester's own ``:_user_*`` attributes.
+
+    ``role`` (authz.py) limits the tables and columns the query may read; anything else is
+    a ``not_authorized`` violation. ``None`` reads everything, as before.
 
     Returns a report rather than raising, so the eval harness can count *which* rule fired
     on every rejected query instead of seeing a single opaque failure.
@@ -228,6 +235,8 @@ def validate(
         schema_violations, schema_warnings = _check_schema(tree, catalog)
         violations.extend(schema_violations)
         warnings.extend(schema_warnings)
+    if catalog is not None and role is not None:
+        violations.extend(_check_authorization(tree, catalog, role))
 
     ok = not violations
     final_sql = sql
@@ -615,6 +624,56 @@ def _check_schema(tree: exp.Expression, catalog: Catalog) -> tuple[list[Violatio
                     f"{', '.join(sorted(owners))}; qualify it with a table or alias"
                 )
     return violations, warnings
+
+
+# ------------------------------------------------------------------------- authorization
+
+
+def _check_authorization(
+    tree: exp.Expression, catalog: Catalog, role: RolePolicy
+) -> list[Violation]:
+    """Every table and column the query reads must be readable by ``role``.
+
+    Fails closed where the schema check is lenient. An unqualified column counts as read
+    from **every** referenced table that has it, and ``*`` as reading every column of
+    every table it could cover; either can reject a query a full scope resolver would
+    allow, never the other way round. A CTE or subquery doesn't hide anything: the tables
+    inside its body are checked like any other.
+    """
+    denied: list[str] = []
+    aliases = _alias_map(tree)
+    derived = _derived_names(tree)
+    declared = _defined_aliases(tree)
+    real = sorted({t for t in _collect_tables(tree) if catalog.has_table(t)})
+
+    for table in real:
+        if not role.can_read(table):
+            denied.append(f"table {table}")
+    readable = [t for t in real if role.can_read(table=t)]
+
+    for column in tree.find_all(exp.Column):
+        name = column.name.lower()
+        qualifier = (column.table or "").lower()
+        target = aliases.get(qualifier) if qualifier else None
+        if qualifier and (target is None or target in derived):
+            continue  # an unknown alias is the schema check's; a derived relation's body is checked
+        if name == "*":
+            if target is not None and role.hides_columns(target):
+                denied.append(f"every column of {target} ({target}.*)")
+            continue
+        if not qualifier and name in declared:
+            continue
+        owners = [target] if target else [t for t in readable if catalog.has_column(t, name)]
+        denied += [f"{t}.{name}" for t in owners if t and not role.can_read(t, name)]
+
+    for star in tree.find_all(exp.Star):
+        if isinstance(star.parent, exp.Select):  # SELECT *, not COUNT(*)
+            denied += [f"every column of {t} (*)" for t in readable if role.hides_columns(t)]
+
+    return [
+        Violation("not_authorized", f"role {role.name!r} cannot read {what}")
+        for what in dict.fromkeys(denied)
+    ]
 
 
 def suggest_identifier(name: str, candidates: frozenset[str] | set[str]) -> str | None:
