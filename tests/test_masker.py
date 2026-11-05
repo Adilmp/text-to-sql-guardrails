@@ -91,6 +91,16 @@ class TestEnglishNames:
         assert masked.text == ":customer_name_1 vs :customer_name_1 last year"
         assert len(masked.bindings) == 1
 
+    @pytest.mark.parametrize("apostrophe", ["'", "’"])
+    def test_a_possessive_is_masked_and_kept(self, masker: Masker, apostrophe: str) -> None:
+        # Found by the privacy eval: "Harbi's" was one word, so the name went unmasked.
+        masked = masker.mask(f"how many of Tariq Al Thani{apostrophe}s orders were late?")
+        assert masked.text == f"how many of :customer_name_1{apostrophe}s orders were late?"
+        assert masked.bindings["customer_name_1"].value == "Tariq Al Thani"
+
+    def test_a_trailing_apostrophe_possessive_is_masked(self, masker: Masker) -> None:
+        assert masker.mask("Tariq Al Thani' orders").text == ":customer_name_1' orders"
+
     def test_first_name_alone_is_not_matched(self, masker: Masker) -> None:
         # Known limit (D44): only full stored values are recognised.
         masked = masker.mask("orders of Tariq")

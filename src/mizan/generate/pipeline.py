@@ -356,6 +356,8 @@ class TextToSQL:
         sql: str,
         bindings: Mapping[str, Binding],
         attrs: Mapping[str, str] | None = None,
+        *,
+        max_rows: int | None = None,
     ) -> QueryResult:
         """Run validated ``sql``: row filters applied, values bound, reads limited to the role.
 
@@ -370,7 +372,7 @@ class TextToSQL:
         return execute(
             sql,
             self.settings.db_path,
-            max_rows=self.settings.max_rows,
+            max_rows=max_rows or self.settings.max_rows,
             timeout_s=self.settings.query_timeout_s,
             params=params,
             role=self.role,

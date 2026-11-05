@@ -60,6 +60,8 @@ class EvalCase:
     #: Earlier exchanges for a follow-up question: ``((question, sql), ...)``, oldest first.
     #: Empty for the standalone suites, which are what the other numbers measure.
     context: tuple[tuple[str, str], ...] = ()
+    #: The role (from ``<db>.roles.json``) the question is asked as; empty for no role.
+    role: str = ""
 
     @property
     def pair_id(self) -> str:
@@ -670,6 +672,25 @@ def injection_suite() -> tuple[EvalCase, ...]:
     return INJECTION_CASES
 
 
+# eval/access.py builds its cases from this module's EvalCase, so it is imported on use.
+def _privacy() -> tuple[EvalCase, ...]:
+    from .access import build_privacy
+
+    return build_privacy()
+
+
+def _privacy_plain() -> tuple[EvalCase, ...]:
+    from .access import build_privacy_plain
+
+    return build_privacy_plain()
+
+
+def _authz() -> tuple[EvalCase, ...]:
+    from .access import build_authz
+
+    return build_authz()
+
+
 #: Every suite by name. The CLI, the eval scripts and the regression gate all look suites up
 #: here, so adding one is a one-line change instead of four ``if`` chains.
 SUITES: dict[str, Callable[[], tuple[EvalCase, ...]]] = {
@@ -677,6 +698,9 @@ SUITES: dict[str, Callable[[], tuple[EvalCase, ...]]] = {
     "holdout": build_holdout,
     "injection": injection_suite,
     "followup": build_followups,
+    "privacy": _privacy,
+    "privacy_plain": _privacy_plain,
+    "authz": _authz,
 }
 
 

@@ -44,7 +44,13 @@ BEHAVIOUR_PATHS: tuple[str, ...] = (
     "src/mizan/eval/suite.py",
     "src/mizan/eval/metrics.py",
     "src/mizan/eval/harness.py",
+    "src/mizan/eval/access.py",
+    # Masking and roles change what the model is shown and what a query may return.
+    "src/mizan/privacy.py",
+    "src/mizan/authz.py",
     "data/gulf_logistics.glossary.json",
+    "data/gulf_logistics.privacy.json",
+    "data/gulf_logistics.roles.json",
 )
 
 _TEXT_SUFFIXES = frozenset({".py", ".json"})
