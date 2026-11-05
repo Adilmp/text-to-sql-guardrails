@@ -28,7 +28,6 @@ from mizan.config import Settings
 from mizan.generate import TextToSQL
 from mizan.providers import MockProvider
 from mizan.schema import Catalog
-
 from test_authz import CONFIG
 
 ALL_CUSTOMERS = "how many customers are there?"

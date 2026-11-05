@@ -43,6 +43,7 @@ from ..nl.normalize import arabic_ratio, normalize_for_matching
 from ..schema.catalog import Catalog, is_prompt_safe
 
 if TYPE_CHECKING:
+    from ..authz import RolePolicy
     from ..privacy import Binding
 
 logger = get_logger("grounding")
@@ -88,6 +89,7 @@ def check_values(
     *,
     bindings: Mapping[str, Binding] | None = None,
     sensitive: Collection[tuple[str, str]] = (),
+    role: RolePolicy | None = None,
 ) -> list[GroundingIssue]:
     """Text values in ``sql`` that don't occur in their column but probably meant one that does.
 
@@ -127,7 +129,7 @@ def check_values(
         if key in seen:
             continue
         seen.add(key)
-        issue = _check_one(table, col, value, catalog, db_path)
+        issue = _check_one(table, col, value, catalog, db_path, role)
         if issue is not None:
             issues.append(issue)
     return issues
@@ -202,7 +204,12 @@ def _resolve(
 
 
 def _check_one(
-    table: str, column: str, value: str, catalog: Catalog, db_path: Path
+    table: str,
+    column: str,
+    value: str,
+    catalog: Catalog,
+    db_path: Path,
+    role: RolePolicy | None = None,
 ) -> GroundingIssue | None:
     target = exp.Table(this=exp.to_identifier(table, quoted=True))
     col = exp.Column(this=exp.to_identifier(column, quoted=True))
@@ -214,7 +221,7 @@ def _check_one(
     )
     try:
         if execute(
-            exists.sql(dialect=DIALECT), db_path, max_rows=1, timeout_s=_LOOKUP_TIMEOUT_S
+            exists.sql(dialect=DIALECT), db_path, max_rows=1, timeout_s=_LOOKUP_TIMEOUT_S, role=role
         ).rows:
             return None
         stored = catalog.table(table).column(column)
@@ -232,6 +239,7 @@ def _check_one(
                 db_path,
                 max_rows=_MAX_DISTINCT + 1,
                 timeout_s=_LOOKUP_TIMEOUT_S,
+                role=role,
             ).rows
             # These values reach the model's prompt in a repair hint, so they get the same
             # filter as the sample values in the schema card (D20): a stored value is

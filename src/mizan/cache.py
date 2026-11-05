@@ -48,6 +48,13 @@ the cache file contains no names. A question in which the user typed placeholder
 (``:customer_name_1``) skips the cache entirely: it would otherwise read, evict or overwrite
 an entry made for someone else's real question.
 
+Roles
+-----
+A role that limits anything (authz.py) has its own context, so its entries, verdicts and
+"instant" markers are its own. The SQL stored is the query as validated, before row filters:
+every hit is validated for the engine's role and run through ``TextToSQL.run_query``, which
+applies that requester's filters, so a cached answer is never another requester's rows.
+
 Settings live here, not in ``config.py``: ``config.py`` holds what can change an answer, and
 that boundary is what the behaviour fingerprint draws (D28). A cache changes how fast an
 answer arrives, not what it is.
@@ -61,7 +68,7 @@ import re
 import sqlite3
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,7 +76,7 @@ from pathlib import Path
 from .config import PROJECT_ROOT
 from .errors import MizanError
 from .generate.pipeline import Answer, TextToSQL
-from .guardrails import execute, validate
+from .guardrails import validate
 from .logging import get_logger
 from .nl import clean_for_model, detect_script, normalize_for_matching
 from .privacy import Binding, has_typed_placeholder
@@ -171,11 +178,17 @@ class CacheHit:
 def cache_context(engine: TextToSQL) -> str:
     """Everything a cached query depends on. Change any of it and old entries stop matching."""
     digest = hashlib.sha256()
+    role = engine.role
+    restricts = role is not None and bool(
+        role.tables is not None or role.deny_columns or role.row_filters
+    )
     for part in (
         engine.system_prompt,
         engine.provider.name,
         engine.provider.model,
         str(engine.settings.temperature),
+        # Only a role that limits something: an unrestricted role shares the plain entries.
+        *([role.name, repr(sorted(role.row_filters.items()))] if role and restricts else []),
     ):
         digest.update(part.encode("utf-8"))
         digest.update(b"\0")
@@ -322,7 +335,10 @@ class CachedTextToSQL:
         self.context = cache_context(engine)
 
     def ask(
-        self, question: str, context: Sequence[tuple[str, str]] = ()
+        self,
+        question: str,
+        context: Sequence[tuple[str, str]] = (),
+        attrs: Mapping[str, str] | None = None,
     ) -> tuple[Answer, CacheHit | None]:
         """Answer from the cache when the question is a known one, else ask the model.
 
@@ -332,10 +348,10 @@ class CachedTextToSQL:
         """
         stored, key, bindings = self._key(question)
         if self.cache is None or not key:
-            return self.engine.ask(question, context), None
-        if (served := self._from_cache(question, key, bindings)) is not None:
+            return self.engine.ask(question, context, attrs), None
+        if (served := self._from_cache(question, key, bindings, attrs)) is not None:
             return served
-        answer = self.engine.ask(question, context)
+        answer = self.engine.ask(question, context, attrs)
         if context:
             return answer, None
         if answer.sql is not None and cacheable(answer, self.settings.min_confidence):
@@ -353,7 +369,11 @@ class CachedTextToSQL:
         return masked.text, canonical_question(masked.text), masked.bindings
 
     def _from_cache(
-        self, question: str, key: str, bindings: dict[str, Binding]
+        self,
+        question: str,
+        key: str,
+        bindings: dict[str, Binding],
+        attrs: Mapping[str, str] | None = None,
     ) -> tuple[Answer, CacheHit] | None:
         if self.cache is None:  # pragma: no cover - guarded by the caller
             return None
@@ -364,7 +384,13 @@ class CachedTextToSQL:
         cached_question, sql, hits, created_at, status = entry
 
         # Validated again, exactly like a fresh model answer: the cache file is untrusted.
-        report = validate(sql, self.engine.catalog, self.engine.policy, placeholders=bindings)
+        report = validate(
+            sql,
+            self.engine.catalog,
+            self.engine.policy,
+            placeholders=bindings,
+            role=self.engine.role,
+        )
         if not report.ok:
             logger.warning(
                 "cached query failed validation; evicted",
@@ -373,13 +399,7 @@ class CachedTextToSQL:
             self.cache.delete(self.context, key)
             return None
         try:
-            result = execute(
-                report.sql,
-                self.engine.settings.db_path,
-                max_rows=self.engine.settings.max_rows,
-                timeout_s=self.engine.settings.query_timeout_s,
-                params={name: b.value for name, b in bindings.items()},
-            )
+            result = self.engine.run_query(report.sql, bindings, attrs)
         except MizanError as exc:
             logger.warning("cached query failed to run; evicted", extra={"error": str(exc)})
             self.cache.delete(self.context, key)

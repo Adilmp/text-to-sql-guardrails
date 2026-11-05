@@ -81,6 +81,11 @@ ignore = [
     "S311",
 ]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency markers are evaluated once, at definition, by design: B008's warning
+# about calls in argument defaults doesn't apply to them (as it already doesn't to Query).
+extend-immutable-calls = ["fastapi.Depends"]
+
 [tool.ruff.lint.per-file-ignores]
 # S101: `assert` is how pytest expresses every assertion. The rule exists because asserts
 # are stripped under `python -O` in production code; test code is never run that way.
